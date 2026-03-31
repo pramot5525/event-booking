@@ -1,0 +1,175 @@
+openapi: 3.0.3
+info:
+  title: Event Booking Service
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8081/api/v1
+
+paths:
+  /events:
+    get:
+      summary: List all events
+      operationId: getEvents
+      responses:
+        "200":
+          description: List of events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Event"
+
+    post:
+      summary: Create a new event
+      operationId: createEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EventRequest"
+      responses:
+        "200":
+          description: Created event ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateEventResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /events/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+
+    get:
+      summary: Get event by ID
+      operationId: getEvent
+      responses:
+        "200":
+          description: Event detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Event"
+        "404":
+          description: Event not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    put:
+      summary: Update event
+      operationId: updateEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EventRequest"
+      responses:
+        "200":
+          description: Updated successfully
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      summary: Delete event
+      operationId: deleteEvent
+      responses:
+        "200":
+          description: Deleted successfully
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    Event:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        name:
+          type: string
+          example: "Go Conference 2025"
+        description:
+          type: string
+          example: "Annual Go programming conference"
+        seat_limit:
+          type: integer
+          format: int32
+          example: 100
+        start_date:
+          type: string
+          format: date-time
+          example: "2025-06-01T09:00:00Z"
+        end_date:
+          type: string
+          format: date-time
+          example: "2025-06-01T18:00:00Z"
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    EventRequest:
+      type: object
+      required:
+        - name
+        - seat_limit
+      properties:
+        name:
+          type: string
+          example: "Go Conference 2025"
+        description:
+          type: string
+          example: "Annual Go programming conference"
+        seat_limit:
+          type: integer
+          format: int32
+          example: 100
+        start_date:
+          type: string
+          format: date-time
+          example: "2025-06-01T09:00:00Z"
+        end_date:
+          type: string
+          format: date-time
+          example: "2025-06-01T18:00:00Z"
+
+    CreateEventResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "internal server error"
