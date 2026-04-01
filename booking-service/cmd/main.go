@@ -2,9 +2,10 @@ package main
 
 import (
 	"booking-service/config"
-	bookinghttp "booking-service/internal/http"
 	"booking-service/internal/client"
+	bookinghttp "booking-service/internal/http"
 	"booking-service/internal/model"
+	"booking-service/internal/pkg/database"
 	"booking-service/internal/repository"
 	"booking-service/internal/service"
 	"log"
@@ -18,7 +19,7 @@ import (
 func main() {
 	cfg := config.Load()
 
-	db, err := config.NewPostgres(cfg)
+	db, err := database.NewPostgres(cfg.DB.DSN())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -33,18 +34,17 @@ func main() {
 		log.Fatal(err)
 	}
 
-	rdb, err := config.NewRedis(cfg)
+	rdb, err := database.NewRedis(cfg.RDB.Host, cfg.RDB.Port, cfg.RDB.User, cfg.RDB.Password, cfg.RDB.Name)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	lockRepo    := repository.NewLockRepository(rdb)
-	queueRepo   := repository.NewQueueRepository(rdb)
-	seatRepo    := repository.NewSeatRepository(rdb)
+	queueRepo := repository.NewQueueRepository(rdb)
+	seatRepo := repository.NewSeatRepository(rdb)
 	bookingRepo := repository.NewBookingRepository(db)
 	eventClient := client.NewEventClient(cfg.EventServiceURL)
 
-	bookingSvc := service.NewBookingService(bookingRepo, lockRepo, queueRepo, seatRepo, eventClient)
+	bookingSvc := service.NewBookingService(bookingRepo, queueRepo, seatRepo, eventClient)
 
 	app := fiber.New()
 	bookinghttp.NewRouter(app, bookingSvc)

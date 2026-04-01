@@ -44,6 +44,7 @@ services:
 
   postgres:
     image: postgres:17-alpine
+    command: postgres -c max_connections=500
     environment:
       POSTGRES_USER: eventbooking
       POSTGRES_PASSWORD: eventbooking
@@ -67,3 +68,4 @@ services:
 
 volumes:
   postgres_data:
+

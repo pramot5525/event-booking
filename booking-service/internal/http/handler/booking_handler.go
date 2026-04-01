@@ -2,6 +2,7 @@ package handler
 
 import (
 	"booking-service/internal/model"
+	"booking-service/internal/pkg/validate"
 	"booking-service/internal/service"
 	"errors"
 
@@ -21,12 +22,23 @@ func (h *bookingHandler) BookEvent(c *fiber.Ctx) error {
 	if err := c.BodyParser(req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
+	// validation
+	if req.EventID <= 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid event_id"})
+	}
+	if req.UserName == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "user_name is required"})
+	}
+	if req.UserEmail == "" || !validate.ValidateEmail(req.UserEmail) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid user_email"})
+	}
+	if req.UserPhone == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "user_phone is required"})
+	}
 
 	booking, err := h.bookingService.BookEvent(req)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrEventBusy):
-			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": err.Error()})
 		case errors.Is(err, service.ErrAlreadyBooked):
 			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": err.Error()})
 		case errors.Is(err, service.ErrEventNotFound):

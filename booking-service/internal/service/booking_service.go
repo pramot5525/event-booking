@@ -8,24 +8,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
 	"strconv"
-	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/redis/go-redis/v9"
 )
 
-const (
-	lockRetryMax    = 700
-	lockRetryDelay  = 20 * time.Millisecond
-	lockRetryJitter = 20 * time.Millisecond
-)
-
 var (
-	ErrEventBusy     = errors.New("event is busy, please try again later")
-	ErrAlreadyBooked = errors.New("already booked this event")
-	ErrEventNotFound = errors.New("event not found")
+	ErrAlreadyBooked    = errors.New("already booked this event")
+	ErrEventNotFound    = errors.New("event not found")
+	ErrNoSeatsAvailable = errors.New("no seats available")
 )
 
 type BookingService interface {
@@ -36,7 +29,6 @@ type BookingService interface {
 
 type bookingService struct {
 	bookingRepo repository.BookingRepository
-	lockRepo    repository.LockRepository
 	queueRepo   repository.QueueRepository
 	seatRepo    repository.SeatRepository
 	eventClient *client.EventClient
@@ -44,14 +36,12 @@ type bookingService struct {
 
 func NewBookingService(
 	bookingRepo repository.BookingRepository,
-	lockRepo repository.LockRepository,
 	queueRepo repository.QueueRepository,
 	seatRepo repository.SeatRepository,
 	eventClient *client.EventClient,
 ) BookingService {
 	return &bookingService{
 		bookingRepo: bookingRepo,
-		lockRepo:    lockRepo,
 		queueRepo:   queueRepo,
 		seatRepo:    seatRepo,
 		eventClient: eventClient,
@@ -80,21 +70,6 @@ func (s *bookingService) getEvent(ctx context.Context, eventID int64) (*reposito
 	return cached, nil
 }
 
-func (s *bookingService) acquireLockWithRetry(ctx context.Context, key string, ttl time.Duration) error {
-	for i := 0; i < lockRetryMax; i++ {
-		acquired, err := s.lockRepo.Acquire(ctx, key, ttl)
-		if err != nil {
-			return fmt.Errorf("acquire lock: %w", err)
-		}
-		if acquired {
-			return nil
-		}
-		jitter := time.Duration(rand.Int63n(int64(lockRetryJitter)))
-		time.Sleep(lockRetryDelay + jitter)
-	}
-	return ErrEventBusy
-}
-
 func (s *bookingService) BookEvent(request *model.CreateBookingRequest) (*model.Booking, error) {
 	ctx := context.Background()
 
@@ -105,12 +80,8 @@ func (s *bookingService) BookEvent(request *model.CreateBookingRequest) (*model.
 
 	userID := uuid.NewSHA1(uuid.NameSpaceDNS, []byte(request.UserEmail))
 
-	lockKey := fmt.Sprintf("event:%d:lock", request.EventID)
-	if err := s.acquireLockWithRetry(ctx, lockKey, 30*time.Second); err != nil {
-		return nil, err
-	}
-	defer s.lockRepo.Release(ctx, lockKey)
-
+	// Fast-path duplicate check. Racy under extreme concurrency, but the DB
+	// unique constraint on (event_id, user_id) is the authoritative guard.
 	exists, err := s.bookingRepo.ExistsByEventAndUser(request.EventID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("check duplicate: %w", err)
@@ -119,43 +90,74 @@ func (s *bookingService) BookEvent(request *model.CreateBookingRequest) (*model.
 		return nil, ErrAlreadyBooked
 	}
 
-	if err := s.seatRepo.Init(ctx, request.EventID, event.SeatLimit); err != nil {
+	// Get or init booked count
+	booked, err := s.seatRepo.GetBooked(ctx, request.EventID)
+	if err != nil && err != redis.Nil {
+		return nil, fmt.Errorf("get booked: %w", err)
+	}
+	if err == redis.Nil {
+		// Count from DB once
+		count, err := s.bookingRepo.CountConfirmedByEventID(request.EventID)
+		if err != nil {
+			return nil, fmt.Errorf("count confirmed bookings: %w", err)
+		}
+		booked = count
+		if err := s.seatRepo.SetBooked(ctx, request.EventID, booked); err != nil {
+			return nil, fmt.Errorf("set booked: %w", err)
+		}
+	}
+
+	available := int32(event.SeatLimit) - int32(booked)
+
+	// Ensure the seat counter exists (SETNX — safe to call concurrently).
+	if err := s.seatRepo.Init(ctx, request.EventID, available); err != nil {
 		return nil, fmt.Errorf("init seat counter: %w", err)
 	}
 
-	remaining, err := s.seatRepo.Remaining(ctx, request.EventID)
+	// Atomically claim one seat. Redis is single-threaded, so DECR is safe
+	// without any application-level lock.
+	newRemaining, err := s.seatRepo.Decrement(ctx, request.EventID)
 	if err != nil {
-		return nil, fmt.Errorf("get remaining seats: %w", err)
+		return nil, fmt.Errorf("decrement seat: %w", err)
 	}
+
+	if newRemaining < 0 {
+		// No seat available — return the counter and fail the booking.
+		_ = s.seatRepo.Increment(ctx, request.EventID)
+		return nil, ErrNoSeatsAvailable
+	}
+
+	seatNum := int32(event.SeatLimit) - int32(newRemaining)
 
 	booking := &model.Booking{
-		EventID: request.EventID,
-		UserID:  userID,
-		Status:  model.BookingStatusConfirmed,
-	}
-
-	if remaining <= 0 {
-		booking.Status = model.BookingStatusPending
-	} else {
-		newRemaining, err := s.seatRepo.Decrement(ctx, request.EventID)
-		if err != nil {
-			return nil, fmt.Errorf("decrement seat: %w", err)
-		}
-		seatNum := int32(event.SeatLimit) - int32(newRemaining)
-		booking.SeatNumber = &seatNum
+		EventID:    request.EventID,
+		UserID:     userID,
+		Status:     model.BookingStatusConfirmed,
+		SeatNumber: &seatNum,
 	}
 
 	if err := s.bookingRepo.CreateBooking(booking); err != nil {
-		if booking.Status == model.BookingStatusConfirmed {
-			_ = s.seatRepo.Increment(ctx, request.EventID)
+		// On any error, return the seat since booking failed.
+		_ = s.seatRepo.Increment(ctx, request.EventID)
+		if isUniqueViolation(err) {
+			return nil, ErrAlreadyBooked
 		}
 		return nil, fmt.Errorf("create booking: %w", err)
 	}
+
+	// Increment booked count on success
+	_ = s.seatRepo.IncrementBooked(ctx, request.EventID)
 
 	payload, _ := json.Marshal(booking)
 	_ = s.queueRepo.Enqueue(ctx, string(payload))
 
 	return booking, nil
+}
+
+// isUniqueViolation reports whether err is a PostgreSQL unique-constraint error.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func (s *bookingService) GetUserBooking(userID string) (*model.Booking, error) {

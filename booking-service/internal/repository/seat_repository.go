@@ -16,12 +16,15 @@ type CachedEvent struct {
 }
 
 type SeatRepository interface {
-	Init(ctx context.Context, eventID int64, seatLimit int32) error
+	Init(ctx context.Context, eventID int64, available int32) error
 	Remaining(ctx context.Context, eventID int64) (int64, error)
 	Decrement(ctx context.Context, eventID int64) (int64, error)
 	Increment(ctx context.Context, eventID int64) error
 	SetEventCache(ctx context.Context, event *CachedEvent) error
 	GetEventCache(ctx context.Context, eventID int64) (*CachedEvent, error)
+	GetBooked(ctx context.Context, eventID int64) (int64, error)
+	SetBooked(ctx context.Context, eventID int64, booked int64) error
+	IncrementBooked(ctx context.Context, eventID int64) error
 }
 
 type seatRepository struct {
@@ -36,9 +39,13 @@ func seatKey(eventID int64) string {
 	return fmt.Sprintf("seats:%d", eventID)
 }
 
-// Init sets the seat counter only if it does not exist yet (SETNX)
-func (r *seatRepository) Init(ctx context.Context, eventID int64, seatLimit int32) error {
-	err := r.rdb.SetArgs(ctx, seatKey(eventID), seatLimit, redis.SetArgs{
+func bookedKey(eventID int64) string {
+	return fmt.Sprintf("booked:%d", eventID)
+}
+
+// Init sets the available seat counter only if it does not exist yet (SETNX)
+func (r *seatRepository) Init(ctx context.Context, eventID int64, available int32) error {
+	err := r.rdb.SetArgs(ctx, seatKey(eventID), available, redis.SetArgs{
 		Mode: "NX",
 	}).Err()
 	if err == redis.Nil {
@@ -85,4 +92,16 @@ func (r *seatRepository) GetEventCache(ctx context.Context, eventID int64) (*Cac
 		return nil, err
 	}
 	return &event, nil
+}
+
+func (r *seatRepository) GetBooked(ctx context.Context, eventID int64) (int64, error) {
+	return r.rdb.Get(ctx, bookedKey(eventID)).Int64()
+}
+
+func (r *seatRepository) SetBooked(ctx context.Context, eventID int64, booked int64) error {
+	return r.rdb.Set(ctx, bookedKey(eventID), booked, 0).Err()
+}
+
+func (r *seatRepository) IncrementBooked(ctx context.Context, eventID int64) error {
+	return r.rdb.Incr(ctx, bookedKey(eventID)).Err()
 }

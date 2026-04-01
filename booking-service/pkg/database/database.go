@@ -1,4 +1,4 @@
-package config
+package database
 
 import (
 	"context"
@@ -12,8 +12,8 @@ import (
 	"gorm.io/gorm"
 )
 
-func NewPostgres(cfg *Config) (*gorm.DB, error) {
-	db, err := gorm.Open(postgres.Open(cfg.DB.DSN()), &gorm.Config{})
+func NewPostgres(dsn string) (*gorm.DB, error) {
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -30,13 +30,13 @@ func NewPostgres(cfg *Config) (*gorm.DB, error) {
 	return db, nil
 }
 
-func NewRedis(cfg *Config) (*redis.Client, error) {
-	db, _ := strconv.Atoi(cfg.RDB.Name)
+func NewRedis(host, port, user, password, db string) (*redis.Client, error) {
+	dbNum, _ := strconv.Atoi(db)
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     fmt.Sprintf("%s:%s", cfg.RDB.Host, cfg.RDB.Port),
-		Username: cfg.RDB.User,
-		Password: cfg.RDB.Password,
-		DB:       db,
+		Addr:     fmt.Sprintf("%s:%s", host, port),
+		Username: user,
+		Password: password,
+		DB:       dbNum,
 	})
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
 		return nil, err
