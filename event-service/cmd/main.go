@@ -7,21 +7,28 @@ import (
 	"event-service/internal/repository"
 	"event-service/internal/service"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/joho/godotenv"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 func main() {
 	_ = godotenv.Load()
 	cfg := config.Load()
 
-	db, err := gorm.Open(postgres.Open(cfg.DB.DSN()), &gorm.Config{})
+	db, err := config.NewPostgres(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer sqlDB.Close()
 
 	if err := db.AutoMigrate(&model.Event{}); err != nil {
 		log.Fatal(err)
@@ -31,7 +38,17 @@ func main() {
 	eventService := service.NewEventService(eventRepo)
 
 	app := fiber.New()
+	// Setup routes
 	httpAdapter.NewRouter(app, eventService)
+
+	// Graceful shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-quit
+		log.Println("shutting down...")
+		_ = app.Shutdown()
+	}()
 
 	log.Fatal(app.Listen(":" + cfg.AppPort))
 }

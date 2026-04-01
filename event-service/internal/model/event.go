@@ -13,7 +13,7 @@ type Event struct {
 	SeatLimit   int32          `json:"seat_limit"`
 	StartDate   *time.Time     `json:"start_date"`
 	EndDate     *time.Time     `json:"end_date"`
-	CreatedAt   *time.Time     `json:"created_at"`
+	CreatedAt   time.Time      `json:"created_at" gorm:"autoCreateTime"`
 	DeletedAt   gorm.DeletedAt `json:"deleted_at"`
 }
 

@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: Event Booking Service
+  title: Event Service
   version: 1.0.0
 
 servers:
@@ -82,6 +82,16 @@ paths:
       responses:
         "200":
           description: Updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Internal server error
           content:
@@ -166,6 +176,13 @@ components:
           type: integer
           format: int64
           example: 1
+
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "updated successfully"
 
     ErrorResponse:
       type: object
