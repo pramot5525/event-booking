@@ -7,6 +7,7 @@ import (
 
 type Config struct {
 	AppPort         string
+	APIKey          string
 	DB              DBConfig
 	RDB             RDBConfig
 	EventServiceURL string
@@ -28,11 +29,6 @@ type DBConfig struct {
 	Name     string
 }
 
-func (d RDBConfig) DSN() string {
-	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",
-		d.User, d.Password, d.Host, d.Port, d.Name)
-}
-
 func (d DBConfig) DSN() string {
 	return fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable",
 		d.Host, d.User, d.Password, d.Name, d.Port)
@@ -41,6 +37,7 @@ func (d DBConfig) DSN() string {
 func Load() *Config {
 	return &Config{
 		AppPort:         getEnv("SERVER_PORT", "8082"),
+		APIKey:          getEnv("API_KEY", ""),
 		EventServiceURL: getEnv("EVENT_SERVICE_URL", "http://localhost:8081"),
 		DB: DBConfig{
 			Host:     getEnv("POSTGRES_HOST", "localhost"),

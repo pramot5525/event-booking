@@ -15,6 +15,12 @@ type Event struct {
 	SeatLimit int32 `json:"seat_limit"`
 }
 
+// EventGetter is the interface the booking service depends on. It makes the
+// real HTTP client swappable with a test double.
+type EventGetter interface {
+	GetEvent(eventID int64) (*Event, error)
+}
+
 type EventClient struct {
 	baseURL    string
 	httpClient *http.Client
@@ -22,15 +28,17 @@ type EventClient struct {
 
 func NewEventClient(baseURL string) *EventClient {
 	return &EventClient{
-		baseURL:    baseURL,
-		httpClient: &http.Client{},
+		baseURL: baseURL,
+		httpClient: &http.Client{
+			Timeout: 5 * time.Second,
+		},
 	}
 }
 
 func (c *EventClient) GetEvent(eventID int64) (*Event, error) {
 	const maxAttempts = 3
 	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := range maxAttempts {
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt*50) * time.Millisecond)
 		}

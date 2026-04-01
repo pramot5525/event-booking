@@ -4,6 +4,7 @@ import (
 	"event-service/config"
 	httpAdapter "event-service/internal/http"
 	"event-service/internal/model"
+	"event-service/internal/pkg/database"
 	"event-service/internal/repository"
 	"event-service/internal/service"
 	"log"
@@ -19,7 +20,7 @@ func main() {
 	_ = godotenv.Load()
 	cfg := config.Load()
 
-	db, err := config.NewPostgres(cfg)
+	db, err := database.NewPostgres(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
