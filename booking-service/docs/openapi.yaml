@@ -1,0 +1,153 @@
+openapi: 3.0.3
+info:
+  title: Booking Service
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8082/api/v1
+
+paths:
+  /bookings:
+    post:
+      summary: Book an event
+      operationId: bookEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBookingRequest"
+      responses:
+        "201":
+          description: Booking created (confirmed or waitlisted)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /bookings/user/{userID}:
+    get:
+      summary: Get booking by user ID
+      operationId: getUserBooking
+      parameters:
+        - name: userID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        "200":
+          description: Booking detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "404":
+          description: Booking not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /bookings/event/{eventID}:
+    get:
+      summary: Get all bookings for an event
+      operationId: getEventBookings
+      parameters:
+        - name: eventID
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            example: 1
+      responses:
+        "200":
+          description: List of bookings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Booking"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    CreateBookingRequest:
+      type: object
+      required:
+        - event_id
+        - user_name
+        - user_email
+        - user_phone
+      properties:
+        event_id:
+          type: integer
+          format: int64
+          example: 1
+        user_name:
+          type: string
+          example: "John Doe"
+        user_email:
+          type: string
+          format: email
+          example: "john@example.com"
+        user_phone:
+          type: string
+          example: "0812345678"
+
+    Booking:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        event_id:
+          type: integer
+          format: int64
+          example: 1
+        user_id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        status:
+          type: string
+          enum: [confirmed, waitlisted, cancelled]
+          example: "confirmed"
+        seat_number:
+          type: integer
+          format: int32
+          nullable: true
+          example: 5
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "event is busy, please try again"

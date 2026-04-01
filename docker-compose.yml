@@ -1,26 +1,71 @@
-
-services: 
-  # app:
-  #   build: .
-  #   ports:
-  #     - "8080:8080"
-  #   environment:
-  #     - REDIS_HOST=redis
-  #     - POSTGRES_HOST=postgres
-  #     - POSTGRES_USER=user
-  #     - POSTGRES_PASSWORD=password
-  #     - POSTGRES_DB=eventdb
-  redis:
-    image: redis:latest
+services:
+  event-service:
+    build:
+      context: ./event-service
+      dockerfile: Dockerfile
     ports:
-      - "6379:6379"
-    restart: always
+      - "8081:8081"
+    environment:
+      APP_PORT: 8081
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: eventbooking
+      POSTGRES_PASSWORD: eventbooking
+      POSTGRES_DB: eventdb
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  booking-service:
+    build:
+      context: ./booking-service
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      SERVER_PORT: 8082
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: eventbooking
+      POSTGRES_PASSWORD: eventbooking
+      POSTGRES_DB: eventdb
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      EVENT_SERVICE_URL: http://event-service:8081
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      event-service:
+        condition: service_started
+    restart: unless-stopped
+
   postgres:
-    image: postgres:latest
+    image: postgres:17-alpine
+    command: postgres -c max_connections=500
     environment:
       POSTGRES_USER: eventbooking
       POSTGRES_PASSWORD: eventbooking
       POSTGRES_DB: eventdb
     ports:
       - "5432:5432"
-    restart: always
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eventbooking -d eventdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
