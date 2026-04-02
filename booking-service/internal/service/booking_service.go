@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -17,10 +18,36 @@ import (
 var (
 	ErrInvalidRequest      = errors.New("invalid request")
 	ErrBookingInProgress   = errors.New("booking already in progress")
-	ErrSoldOut             = errors.New("seats sold out")
 	ErrAlreadyBooked       = errors.New("user already booked")
 	ErrQuotaNotInitialized = errors.New("quota not initialized")
 )
+
+// luaDecrQuota atomically checks quota and decrements it in a single round trip.
+// Returns remaining seats (>= 0) on success, -1 if quota is already 0 (no seats).
+// Returns a Redis error "QUOTA_NOT_INITIALIZED" if the key does not exist.
+var luaDecrQuota = redis.NewScript(`
+local val = redis.call('GET', KEYS[1])
+if val == false then
+    return redis.error_reply('QUOTA_NOT_INITIALIZED')
+end
+local n = tonumber(val)
+if n <= 0 then
+    return -1
+end
+return redis.call('DECR', KEYS[1])
+`)
+
+// luaIncrWaitlistSeq seeds the waitlist sequence key if absent, then increments it.
+// Combining SETNX + EXPIRE + INCR in one script prevents duplicate positions when
+// the TTL expires under concurrent load.
+// KEYS[1] = sequence key, ARGV[1] = seed value, ARGV[2] = TTL in seconds.
+var luaIncrWaitlistSeq = redis.NewScript(`
+local set = redis.call('SETNX', KEYS[1], ARGV[1])
+if set == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+return redis.call('INCR', KEYS[1])
+`)
 
 type BookingService interface {
 	BookSeat(ctx context.Context, req BookSeatRequest) (*BookSeatResult, error)
@@ -35,9 +62,10 @@ type BookSeatRequest struct {
 }
 
 type BookSeatResult struct {
-	Status    string         `json:"status"`
-	Booking   *model.Booking `json:"booking,omitempty"`
-	Remaining int64          `json:"remaining_seats"`
+	Status        string         `json:"status"`
+	Booking       *model.Booking `json:"booking,omitempty"`
+	WaitlistEntry *model.Booking `json:"waitlist_entry,omitempty"`
+	Remaining     int64          `json:"remaining_seats"`
 }
 
 type bookingService struct {
@@ -80,23 +108,30 @@ func (s *bookingService) BookSeat(ctx context.Context, req BookSeatRequest) (*Bo
 	if !ok {
 		return nil, ErrBookingInProgress
 	}
+	defer s.rdb.Del(ctx, lockKey) // release lock on all exit paths
 
-	quotaKey := quotaKey(req.EventID)
-	if err := s.ensureQuota(ctx, req.EventID, quotaKey); err != nil {
-		_ = s.rdb.Del(ctx, lockKey).Err()
-		return nil, err
-	}
-
-	remaining, err := s.rdb.Decr(ctx, quotaKey).Result()
+	qKey := quotaKey(req.EventID)
+	remaining, err := luaDecrQuota.Run(ctx, s.rdb, []string{qKey}).Int64()
 	if err != nil {
-		_ = s.rdb.Del(ctx, lockKey).Err()
+		if err.Error() == "QUOTA_NOT_INITIALIZED" {
+			return nil, ErrQuotaNotInitialized
+		}
 		return nil, fmt.Errorf("decrement quota: %w", err)
 	}
 
 	if remaining < 0 {
-		_, _ = s.rdb.Incr(ctx, quotaKey).Result()
-		_ = s.rdb.Del(ctx, lockKey).Err()
-		return nil, ErrSoldOut
+		waitlistEntry, err := s.createWaitlistEntry(ctx, req, userID)
+		if err != nil {
+			if errors.Is(err, repository.ErrDuplicateBooking) {
+				return nil, ErrAlreadyBooked
+			}
+			return nil, err
+		}
+		return &BookSeatResult{
+			Status:        "waitlisted",
+			WaitlistEntry: waitlistEntry,
+			Remaining:     0,
+		}, nil
 	}
 
 	booking := &model.Booking{
@@ -109,9 +144,9 @@ func (s *bookingService) BookSeat(ctx context.Context, req BookSeatRequest) (*Bo
 	}
 
 	if err := s.repo.CreateBooking(ctx, booking); err != nil {
-		_, _ = s.rdb.Incr(ctx, quotaKey).Result()
-		_ = s.rdb.Del(ctx, lockKey).Err()
-
+		if rollbackErr := s.rdb.Incr(ctx, qKey).Err(); rollbackErr != nil {
+			log.Printf("CRITICAL: quota rollback failed for event %d user %s: %v", req.EventID, userID, rollbackErr)
+		}
 		if errors.Is(err, repository.ErrDuplicateBooking) {
 			return nil, ErrAlreadyBooked
 		}
@@ -125,35 +160,44 @@ func (s *bookingService) BookSeat(ctx context.Context, req BookSeatRequest) (*Bo
 	}, nil
 }
 
-func (s *bookingService) ensureQuota(ctx context.Context, eventID uint, key string) error {
-	exists, err := s.rdb.Exists(ctx, key).Result()
+func (s *bookingService) createWaitlistEntry(ctx context.Context, req BookSeatRequest, userID string) (*model.Booking, error) {
+	seqKey := waitlistSeqKey(req.EventID)
+
+	// Only query DB to seed the sequence if the Redis key doesn't exist.
+	// Once seeded, luaIncrWaitlistSeq just INCRs — the DB value is unused.
+	var maxPos int64
+	exists, err := s.rdb.Exists(ctx, seqKey).Result()
 	if err != nil {
-		return fmt.Errorf("check quota exists: %w", err)
+		return nil, fmt.Errorf("check waitlist seq key: %w", err)
 	}
-	if exists == 1 {
-		return nil
+	if exists == 0 {
+		maxPos, err = s.repo.GetMaxWaitlistPosition(ctx, req.EventID)
+		if err != nil {
+			return nil, fmt.Errorf("get max waitlist position: %w", err)
+		}
 	}
 
-	seatLimit, err := s.eventClient.GetEventSeatLimit(ctx, eventID)
+	ttlSecs := int64(s.quotaSeedTTL.Seconds())
+	position, err := luaIncrWaitlistSeq.Run(ctx, s.rdb, []string{seqKey}, maxPos, ttlSecs).Int64()
 	if err != nil {
-		return fmt.Errorf("get event seat_limit: %w", err)
+		return nil, fmt.Errorf("increment waitlist sequence: %w", err)
 	}
 
-	booked, err := s.repo.CountBookingsByEvent(ctx, eventID)
-	if err != nil {
-		return fmt.Errorf("count current bookings: %w", err)
+	waitlist := &model.Booking{
+		EventID:   req.EventID,
+		UID:       userID,
+		UserName:  req.UserName,
+		UserEmail: req.UserEmail,
+		UserPhone: req.UserPhone,
+		Status:    "waitlisted",
+		Position:  &position,
 	}
 
-	remaining := seatLimit - booked
-	if remaining < 0 {
-		remaining = 0
+	if err := s.repo.CreateBooking(ctx, waitlist); err != nil {
+		return nil, fmt.Errorf("persist waitlist entry: %w", err)
 	}
 
-	if err := s.rdb.SetNX(ctx, key, remaining, s.quotaSeedTTL).Err(); err != nil {
-		return fmt.Errorf("seed redis quota: %w", err)
-	}
-
-	return nil
+	return waitlist, nil
 }
 
 func quotaKey(eventID uint) string {
@@ -162,6 +206,10 @@ func quotaKey(eventID uint) string {
 
 func lockRedisKey(eventID uint, userID string) string {
 	return fmt.Sprintf("lock:%d:%s", eventID, userID)
+}
+
+func waitlistSeqKey(eventID uint) string {
+	return fmt.Sprintf("event:%d:waitlist:seq", eventID)
 }
 
 func stableUserID(email string) string {

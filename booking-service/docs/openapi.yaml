@@ -30,7 +30,8 @@ paths:
         1) Acquire idempotency lock with Redis SET NX
         2) Atomically decrement quota with Redis DECR
         3) Persist booking in Postgres
-        4) Rollback quota with Redis INCR if DB write fails
+        4) If quota is full, rollback with Redis INCR and persist waitlist entry
+        5) Rollback quota with Redis INCR if DB write fails
       operationId: createBooking
       requestBody:
         required: true
@@ -40,7 +41,7 @@ paths:
               $ref: "#/components/schemas/CreateBookingRequest"
       responses:
         "201":
-          description: Booking confirmed
+          description: Booking confirmed or waitlisted
           content:
             application/json:
               schema:
@@ -52,7 +53,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
-          description: Booking conflict (in progress, sold out, or already booked)
+          description: Booking conflict (in progress or already booked)
           content:
             application/json:
               schema:
@@ -61,9 +62,6 @@ paths:
                 inProgress:
                   value:
                     error: booking is already in progress for this user
-                soldOut:
-                  value:
-                    error: seats sold out
                 alreadyBooked:
                   value:
                     error: user already booked this event
@@ -179,12 +177,15 @@ components:
           type: string
           enum:
             - confirmed
-          example: confirmed
+            - waitlisted
+          example: waitlisted
         remaining_seats:
           type: integer
           format: int64
-          example: 99
+          example: 0
         booking:
+          $ref: "#/components/schemas/Booking"
+        waitlist_entry:
           $ref: "#/components/schemas/Booking"
 
     InitializeQuotaRequest:

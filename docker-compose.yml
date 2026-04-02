@@ -12,9 +12,14 @@ services:
       POSTGRES_USER: eventbooking
       POSTGRES_PASSWORD: eventbooking
       POSTGRES_DB: eventdb
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CACHE_TTL: 5m
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
     restart: unless-stopped
 
   booking-service:

@@ -47,7 +47,7 @@ func (s *EventServiceSuite) TestGetEvents_TableDriven() {
 		s.T().Run(tc.name, func(t *testing.T) {
 			repo := repomocks.NewEventRepository(t)
 			tc.setup(repo)
-			svc := NewEventService(repo)
+			svc := NewEventService(repo, nil, 0)
 
 			got, err := svc.GetEvents()
 			if tc.wantErr {
@@ -93,7 +93,7 @@ func (s *EventServiceSuite) TestGetEvent_TableDriven() {
 		s.T().Run(tc.name, func(t *testing.T) {
 			repo := repomocks.NewEventRepository(t)
 			tc.setup(repo)
-			svc := NewEventService(repo)
+			svc := NewEventService(repo, nil, 0)
 
 			got, err := svc.GetEvent(tc.id)
 			if tc.wantErr {
@@ -138,7 +138,7 @@ func (s *EventServiceSuite) TestCreateEvent_TableDriven() {
 		s.T().Run(tc.name, func(t *testing.T) {
 			repo := repomocks.NewEventRepository(t)
 			tc.setup(repo, tc.input)
-			svc := NewEventService(repo)
+			svc := NewEventService(repo, nil, 0)
 
 			gotID, err := svc.CreateEvent(tc.input)
 			if tc.wantErr {
@@ -182,7 +182,7 @@ func (s *EventServiceSuite) TestUpdateEvent_TableDriven() {
 		s.T().Run(tc.name, func(t *testing.T) {
 			repo := repomocks.NewEventRepository(t)
 			tc.setup(repo, tc.input)
-			svc := NewEventService(repo)
+			svc := NewEventService(repo, nil, 0)
 
 			err := svc.UpdateEvent(tc.input)
 			if tc.wantErr {
@@ -223,7 +223,7 @@ func (s *EventServiceSuite) TestDeleteEvent_TableDriven() {
 		s.T().Run(tc.name, func(t *testing.T) {
 			repo := repomocks.NewEventRepository(t)
 			tc.setup(repo, tc.id)
-			svc := NewEventService(repo)
+			svc := NewEventService(repo, nil, 0)
 
 			err := svc.DeleteEvent(tc.id)
 			if tc.wantErr {

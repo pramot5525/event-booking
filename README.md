@@ -6,9 +6,9 @@ A microservice-based event booking system with concurrency-safe seat reservation
 
 ```
 ┌──────────────┐     ┌───────────────────┐     ┌─────────────────┐
-│   Web App    │────▶│  Event Service    │     │ Booking Service │
-│  (Next.js)   │     │  (Go) :8081       │◀────│  (Go) :8082     │
-│  :3000       │────▶│                   │     │                 │
+│  xxx    │────▶│  Event Service    │     │ Booking Service │
+│  xxx   │     │  (Go) :8081       │◀────│  (Go) :8082     │
+│  :xxx       │────▶│                   │     │                 │
 └──────────────┘     └───────────────────┘     └─────────────────┘
                                │                        │
                                ▼                        ▼
@@ -17,7 +17,6 @@ A microservice-based event booking system with concurrency-safe seat reservation
 
 | Service | Description | Port |
 |---|---|---|
-| `web-app` | Next.js frontend for browsing and booking events | 3000 |
 | `event-service` | Manages event catalog (create, list, get by ID) | 8081 |
 | `booking-service` | Handles seat reservations and waitlist | 8082 |
 

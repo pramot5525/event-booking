@@ -47,8 +47,6 @@ func (h *BookingHandler) BookSeat(c *fiber.Ctx) error {
 			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "booking is already in progress for this user"})
 		case errors.Is(err, service.ErrAlreadyBooked):
 			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "user already booked this event"})
-		case errors.Is(err, service.ErrSoldOut):
-			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "seats sold out"})
 		default:
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "booking failed"})
 		}
