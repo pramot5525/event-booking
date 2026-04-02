@@ -4,8 +4,8 @@ import (
 	"booking-service/internal/http/handler"
 	"booking-service/internal/service"
 
-	swagger "github.com/gofiber/swagger"
 	"github.com/gofiber/fiber/v2"
+	swagger "github.com/gofiber/swagger"
 )
 
 func NewRouter(app *fiber.App, bookingService service.BookingService) {
@@ -20,6 +20,6 @@ func NewRouter(app *fiber.App, bookingService service.BookingService) {
 
 	v1 := app.Group("/api/v1")
 	v1.Post("/bookings", bookingHandler.BookEvent)
-	v1.Get("/bookings/user/:userID", bookingHandler.GetUserBooking)
+	v1.Get("/bookings/user/:uid", bookingHandler.GetUserBookings)
 	v1.Get("/bookings/event/:eventID", bookingHandler.GetEventBookings)
 }

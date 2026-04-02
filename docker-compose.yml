@@ -1,4 +1,20 @@
 services:
+  web-app:
+    build:
+      context: ./web-app
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      EVENT_SERVICE_URL: http://event-service:8081
+      BOOKING_SERVICE_URL: http://booking-service:8082
+    depends_on:
+      event-service:
+        condition: service_started
+      booking-service:
+        condition: service_started
+    restart: unless-stopped
+
   event-service:
     build:
       context: ./event-service

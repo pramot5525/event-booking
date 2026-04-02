@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"fmt"
-	"log"
 	"strconv"
 	"time"
 
@@ -15,7 +14,7 @@ import (
 func NewPostgres(dsn string) (*gorm.DB, error) {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	sqlDB, err := db.DB()
@@ -23,15 +22,19 @@ func NewPostgres(dsn string) (*gorm.DB, error) {
 		return nil, err
 	}
 
-	sqlDB.SetMaxIdleConns(10)
-	sqlDB.SetMaxOpenConns(100)
+	sqlDB.SetMaxIdleConns(25)
+	sqlDB.SetMaxOpenConns(300)
+	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
 	sqlDB.SetConnMaxLifetime(30 * time.Minute)
 
 	return db, nil
 }
 
 func NewRedis(host, port, user, password, db string) (*redis.Client, error) {
-	dbNum, _ := strconv.Atoi(db)
+	dbNum, err := strconv.Atoi(db)
+	if err != nil {
+		return nil, fmt.Errorf("invalid REDIS_DB value %q: %w", db, err)
+	}
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     fmt.Sprintf("%s:%s", host, port),
 		Username: user,

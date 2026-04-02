@@ -5,6 +5,7 @@ import (
 	"booking-service/internal/pkg/validate"
 	"booking-service/internal/service"
 	"errors"
+	"log"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -22,7 +23,6 @@ func (h *bookingHandler) BookEvent(c *fiber.Ctx) error {
 	if err := c.BodyParser(req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
-	// validation
 	if req.EventID <= 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid event_id"})
 	}
@@ -36,30 +36,37 @@ func (h *bookingHandler) BookEvent(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "user_phone is required"})
 	}
 
-	booking, err := h.bookingService.BookEvent(req)
+	result, err := h.bookingService.BookEvent(req)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrAlreadyBooked):
 			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": err.Error()})
+		case errors.Is(err, service.ErrAlreadyWaitlisted):
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": err.Error()})
 		case errors.Is(err, service.ErrEventNotFound):
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": err.Error()})
 		default:
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+			log.Printf("book event error: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal server error"})
 		}
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(booking)
+	return c.Status(fiber.StatusCreated).JSON(result)
 }
 
-func (h *bookingHandler) GetUserBooking(c *fiber.Ctx) error {
-	userID := c.Params("userID")
+func (h *bookingHandler) GetUserBookings(c *fiber.Ctx) error {
+	uid := c.Params("uid")
 
-	booking, err := h.bookingService.GetUserBooking(userID)
+	bookings, err := h.bookingService.GetUserBookings(uid)
 	if err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": err.Error()})
+		if errors.Is(err, service.ErrInvalidUID) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid uid"})
+		}
+		log.Printf("get user bookings error: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal server error"})
 	}
 
-	return c.Status(fiber.StatusOK).JSON(booking)
+	return c.Status(fiber.StatusOK).JSON(bookings)
 }
 
 func (h *bookingHandler) GetEventBookings(c *fiber.Ctx) error {
@@ -67,7 +74,8 @@ func (h *bookingHandler) GetEventBookings(c *fiber.Ctx) error {
 
 	bookings, err := h.bookingService.GetEventBookings(eventID)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		log.Printf("get event bookings error: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal server error"})
 	}
 
 	return c.Status(fiber.StatusOK).JSON(bookings)

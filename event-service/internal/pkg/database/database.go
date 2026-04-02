@@ -1,6 +1,7 @@
-package config
+package database
 
 import (
+	"event-service/config"
 	"log"
 	"time"
 
@@ -8,7 +9,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func NewPostgres(cfg *Config) (*gorm.DB, error) {
+func NewPostgres(cfg *config.Config) (*gorm.DB, error) {
 	db, err := gorm.Open(postgres.Open(cfg.DB.DSN()), &gorm.Config{})
 	if err != nil {
 		log.Fatal(err)

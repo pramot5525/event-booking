@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 
 	"github.com/google/uuid"
@@ -15,36 +16,52 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// bookingNamespace is the UUID v5 namespace used to derive user IDs from email
+// addresses. A dedicated namespace avoids collisions with other v5 namespaces.
+var bookingNamespace = uuid.MustParse("e9b5c5a0-1f4a-4e8b-9d5c-7f2b3e6a8d1c")
+
 var (
-	ErrAlreadyBooked    = errors.New("already booked this event")
-	ErrEventNotFound    = errors.New("event not found")
-	ErrNoSeatsAvailable = errors.New("no seats available")
+	ErrAlreadyBooked     = errors.New("already booked this event")
+	ErrAlreadyWaitlisted = errors.New("already on the waitlist for this event")
+	ErrEventNotFound     = errors.New("event not found")
+	ErrInvalidUID        = errors.New("invalid uid")
 )
 
+// BookEventResult is returned by BookEvent. Status is either "confirmed" or
+// "waitlisted"; only the corresponding field is non-nil.
+type BookEventResult struct {
+	Status        string               `json:"status"`
+	Booking       *model.Booking       `json:"booking,omitempty"`
+	WaitlistEntry *model.WaitlistEntry `json:"waitlist_entry,omitempty"`
+}
+
 type BookingService interface {
-	BookEvent(request *model.CreateBookingRequest) (*model.Booking, error)
-	GetUserBooking(userID string) (*model.Booking, error)
+	BookEvent(request *model.CreateBookingRequest) (*BookEventResult, error)
+	GetUserBookings(uid string) ([]*model.Booking, error)
 	GetEventBookings(eventID string) ([]*model.Booking, error)
 }
 
 type bookingService struct {
-	bookingRepo repository.BookingRepository
-	queueRepo   repository.QueueRepository
-	seatRepo    repository.SeatRepository
-	eventClient *client.EventClient
+	bookingRepo  repository.BookingRepository
+	waitlistRepo repository.WaitlistRepository
+	queueRepo    repository.QueueRepository
+	seatRepo     repository.SeatRepository
+	eventClient  client.EventGetter
 }
 
 func NewBookingService(
 	bookingRepo repository.BookingRepository,
+	waitlistRepo repository.WaitlistRepository,
 	queueRepo repository.QueueRepository,
 	seatRepo repository.SeatRepository,
-	eventClient *client.EventClient,
+	eventClient client.EventGetter,
 ) BookingService {
 	return &bookingService{
-		bookingRepo: bookingRepo,
-		queueRepo:   queueRepo,
-		seatRepo:    seatRepo,
-		eventClient: eventClient,
+		bookingRepo:  bookingRepo,
+		waitlistRepo: waitlistRepo,
+		queueRepo:    queueRepo,
+		seatRepo:     seatRepo,
+		eventClient:  eventClient,
 	}
 }
 
@@ -66,11 +83,15 @@ func (s *bookingService) getEvent(ctx context.Context, eventID int64) (*reposito
 	}
 
 	cached = &repository.CachedEvent{ID: ev.ID, SeatLimit: ev.SeatLimit}
-	_ = s.seatRepo.SetEventCache(ctx, cached)
+	if err := s.seatRepo.SetEventCache(ctx, cached); err != nil {
+		log.Printf("warning: failed to cache event %d: %v", eventID, err)
+	}
 	return cached, nil
 }
 
-func (s *bookingService) BookEvent(request *model.CreateBookingRequest) (*model.Booking, error) {
+// BookEvent attempts to claim a confirmed seat. When no seat is available the
+// caller is automatically added to the waitlist instead.
+func (s *bookingService) BookEvent(request *model.CreateBookingRequest) (*BookEventResult, error) {
 	ctx := context.Background()
 
 	event, err := s.getEvent(ctx, request.EventID)
@@ -78,94 +99,144 @@ func (s *bookingService) BookEvent(request *model.CreateBookingRequest) (*model.
 		return nil, err
 	}
 
-	userID := uuid.NewSHA1(uuid.NameSpaceDNS, []byte(request.UserEmail))
+	uid := uuid.NewSHA1(bookingNamespace, []byte(request.UserEmail))
 
-	// Fast-path duplicate check. Racy under extreme concurrency, but the DB
-	// unique constraint on (event_id, user_id) is the authoritative guard.
-	exists, err := s.bookingRepo.ExistsByEventAndUser(request.EventID, userID)
+	if err := s.initSeatCounter(ctx, request.EventID, event.SeatLimit); err != nil {
+		return nil, err
+	}
+
+	remaining, err := s.seatRepo.Decrement(ctx, request.EventID)
 	if err != nil {
-		return nil, fmt.Errorf("check duplicate: %w", err)
-	}
-	if exists {
-		return nil, ErrAlreadyBooked
+		return nil, fmt.Errorf("claim seat: %w", err)
 	}
 
-	// Get or init booked count
-	booked, err := s.seatRepo.GetBooked(ctx, request.EventID)
+	if remaining < 0 {
+		_ = s.seatRepo.Increment(ctx, request.EventID) // release the over-claimed slot
+		return s.addToWaitlist(request, uid)
+	}
+
+	return s.persistConfirmedBooking(ctx, request, uid, event.SeatLimit, remaining)
+}
+
+// initSeatCounter ensures the Redis seat counter exists for the event.
+//
+// Under high concurrency every goroutine races to initialise the counter at
+// start-up (cold cache). Without a guard all of them would hit the DB
+// simultaneously. A short-lived Redis lock (SETNX) ensures exactly one
+// goroutine performs the expensive DB count; the rest skip the DB query and
+// let Init's SETNX semantics make their call a no-op once the winner sets
+// the key.
+func (s *bookingService) initSeatCounter(ctx context.Context, eventID int64, seatLimit int32) error {
+	booked, err := s.seatRepo.GetBooked(ctx, eventID)
 	if err != nil && err != redis.Nil {
-		return nil, fmt.Errorf("get booked: %w", err)
+		return fmt.Errorf("get booked count: %w", err)
 	}
+
 	if err == redis.Nil {
-		// Count from DB once
-		count, err := s.bookingRepo.CountConfirmedByEventID(request.EventID)
-		if err != nil {
-			return nil, fmt.Errorf("count confirmed bookings: %w", err)
+		// Only the goroutine that wins the lock queries the DB.
+		won, lockErr := s.seatRepo.TryAcquireInitLock(ctx, eventID)
+		if lockErr != nil {
+			return fmt.Errorf("acquire init lock: %w", lockErr)
 		}
-		booked = count
-		if err := s.seatRepo.SetBooked(ctx, request.EventID, booked); err != nil {
-			return nil, fmt.Errorf("set booked: %w", err)
+		if won {
+			booked, err = s.bookingRepo.CountConfirmedByEventID(eventID)
+			if err != nil {
+				return fmt.Errorf("count confirmed bookings: %w", err)
+			}
+			if err := s.seatRepo.SetBooked(ctx, eventID, booked); err != nil {
+				return fmt.Errorf("set booked count: %w", err)
+			}
+		} else {
+			// Another goroutine is seeding; use 0 as a safe default.
+			// Init below uses SETNX so it becomes a no-op once the winner
+			// sets the key with the correct value.
+			booked = 0
 		}
 	}
 
-	available := int32(event.SeatLimit) - int32(booked)
-
-	// Ensure the seat counter exists (SETNX — safe to call concurrently).
-	if err := s.seatRepo.Init(ctx, request.EventID, available); err != nil {
-		return nil, fmt.Errorf("init seat counter: %w", err)
+	available := int32(seatLimit) - int32(booked)
+	if err := s.seatRepo.Init(ctx, eventID, available); err != nil {
+		return fmt.Errorf("init seat counter: %w", err)
 	}
+	return nil
+}
 
-	// Atomically claim one seat. Redis is single-threaded, so DECR is safe
-	// without any application-level lock.
-	newRemaining, err := s.seatRepo.Decrement(ctx, request.EventID)
+// persistConfirmedBooking saves the booking record and enqueues it for
+// downstream processing. On DB failure it rolls back the claimed seat slot.
+func (s *bookingService) persistConfirmedBooking(ctx context.Context, request *model.CreateBookingRequest, uid uuid.UUID, seatLimit int32, remaining int64) (*BookEventResult, error) {
+	onWaitlist, err := s.waitlistRepo.ExistsByEventAndUser(request.EventID, uid)
 	if err != nil {
-		return nil, fmt.Errorf("decrement seat: %w", err)
+		return nil, fmt.Errorf("check duplicate waitlist: %w", err)
 	}
-
-	if newRemaining < 0 {
-		// No seat available — return the counter and fail the booking.
+	if onWaitlist {
 		_ = s.seatRepo.Increment(ctx, request.EventID)
-		return nil, ErrNoSeatsAvailable
+		return nil, ErrAlreadyWaitlisted
 	}
 
-	seatNum := int32(event.SeatLimit) - int32(newRemaining)
-
+	seatNum := int32(seatLimit) - int32(remaining)
 	booking := &model.Booking{
 		EventID:    request.EventID,
-		UserID:     userID,
+		UID:        uid,
+		UserName:   request.UserName,
+		UserEmail:  request.UserEmail,
+		UserPhone:  request.UserPhone,
 		Status:     model.BookingStatusConfirmed,
 		SeatNumber: &seatNum,
 	}
 
 	if err := s.bookingRepo.CreateBooking(booking); err != nil {
-		// On any error, return the seat since booking failed.
-		_ = s.seatRepo.Increment(ctx, request.EventID)
+		_ = s.seatRepo.Increment(ctx, request.EventID) // roll back the claimed slot
 		if isUniqueViolation(err) {
 			return nil, ErrAlreadyBooked
 		}
 		return nil, fmt.Errorf("create booking: %w", err)
 	}
 
-	// Increment booked count on success
 	_ = s.seatRepo.IncrementBooked(ctx, request.EventID)
+	s.enqueue(booking)
 
-	payload, _ := json.Marshal(booking)
-	_ = s.queueRepo.Enqueue(ctx, string(payload))
-
-	return booking, nil
+	return &BookEventResult{Status: "confirmed", Booking: booking}, nil
 }
 
-// isUniqueViolation reports whether err is a PostgreSQL unique-constraint error.
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
-}
-
-func (s *bookingService) GetUserBooking(userID string) (*model.Booking, error) {
-	uid, err := uuid.Parse(userID)
+func (s *bookingService) addToWaitlist(request *model.CreateBookingRequest, uid uuid.UUID) (*BookEventResult, error) {
+	exists, err := s.bookingRepo.ExistsByEventAndUID(request.EventID, uid)
 	if err != nil {
-		return nil, fmt.Errorf("invalid user_id: %w", err)
+		return nil, fmt.Errorf("check duplicate booking: %w", err)
 	}
-	return s.bookingRepo.GetBookingByUserID(uid)
+	if exists {
+		return nil, ErrAlreadyBooked
+	}
+
+	position, err := s.waitlistRepo.CountWaiting(request.EventID)
+	if err != nil {
+		return nil, fmt.Errorf("count waitlist: %w", err)
+	}
+
+	entry := &model.WaitlistEntry{
+		EventID:   request.EventID,
+		UID:       uid,
+		UserName:  request.UserName,
+		UserEmail: request.UserEmail,
+		UserPhone: request.UserPhone,
+		Position:  position + 1,
+		Status:    model.WaitlistStatusWaiting,
+	}
+	if err := s.waitlistRepo.Add(entry); err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrAlreadyWaitlisted
+		}
+		return nil, fmt.Errorf("add to waitlist: %w", err)
+	}
+
+	return &BookEventResult{Status: "waitlisted", WaitlistEntry: entry}, nil
+}
+
+func (s *bookingService) GetUserBookings(u string) ([]*model.Booking, error) {
+	uid, err := uuid.Parse(u)
+	if err != nil {
+		return nil, ErrInvalidUID
+	}
+	return s.bookingRepo.GetBookingsByUID(uid)
 }
 
 func (s *bookingService) GetEventBookings(eventID string) ([]*model.Booking, error) {
@@ -174,4 +245,20 @@ func (s *bookingService) GetEventBookings(eventID string) ([]*model.Booking, err
 		return nil, fmt.Errorf("invalid event_id: %w", err)
 	}
 	return s.bookingRepo.GetBookingsByEventID(id)
+}
+
+func (s *bookingService) enqueue(booking *model.Booking) {
+	payload, err := json.Marshal(booking)
+	if err != nil {
+		log.Printf("warning: failed to marshal booking %d for queue: %v", booking.ID, err)
+		return
+	}
+	if err := s.queueRepo.Enqueue(context.Background(), booking.EventID, string(payload)); err != nil {
+		log.Printf("warning: failed to enqueue booking %d: %v", booking.ID, err)
+	}
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

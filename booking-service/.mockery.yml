@@ -1,0 +1,23 @@
+template: testify
+force-file-write: true
+log-level: info
+packages:
+  booking-service/internal/repository:
+    config:
+      dir: '{{.InterfaceDir}}/mocks'
+      pkgname: mocks
+      filename: '{{snakecase .InterfaceName}}.go'
+      structname: '{{.InterfaceName}}'
+    interfaces:
+      BookingRepository:
+      WaitlistRepository:
+      QueueRepository:
+      SeatRepository:
+  booking-service/internal/client:
+    config:
+      dir: '{{.InterfaceDir}}/mocks'
+      pkgname: mocks
+      filename: '{{snakecase .InterfaceName}}.go'
+      structname: '{{.InterfaceName}}'
+    interfaces:
+      EventGetter:

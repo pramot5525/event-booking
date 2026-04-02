@@ -10,9 +10,15 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+const seatTTL = 24 * time.Hour
+
 type CachedEvent struct {
 	ID        int64 `json:"id"`
 	SeatLimit int32 `json:"seat_limit"`
+}
+
+type seatRepository struct {
+	rdb *redis.Client
 }
 
 type SeatRepository interface {
@@ -25,10 +31,9 @@ type SeatRepository interface {
 	GetBooked(ctx context.Context, eventID int64) (int64, error)
 	SetBooked(ctx context.Context, eventID int64, booked int64) error
 	IncrementBooked(ctx context.Context, eventID int64) error
-}
-
-type seatRepository struct {
-	rdb *redis.Client
+	// TryAcquireInitLock attempts to acquire a short-lived distributed lock for
+	// seeding the seat counter. Returns true only for the one goroutine that wins.
+	TryAcquireInitLock(ctx context.Context, eventID int64) (bool, error)
 }
 
 func NewSeatRepository(rdb *redis.Client) SeatRepository {
@@ -43,10 +48,11 @@ func bookedKey(eventID int64) string {
 	return fmt.Sprintf("booked:%d", eventID)
 }
 
-// Init sets the available seat counter only if it does not exist yet (SETNX)
+// Init sets the available seat counter only if it does not exist yet (SETNX).
 func (r *seatRepository) Init(ctx context.Context, eventID int64, available int32) error {
 	err := r.rdb.SetArgs(ctx, seatKey(eventID), available, redis.SetArgs{
 		Mode: "NX",
+		TTL:  seatTTL,
 	}).Err()
 	if err == redis.Nil {
 		return nil // key already exists, that's fine
@@ -98,10 +104,31 @@ func (r *seatRepository) GetBooked(ctx context.Context, eventID int64) (int64, e
 	return r.rdb.Get(ctx, bookedKey(eventID)).Int64()
 }
 
+// SetBooked sets the booked counter only if it does not already exist (SETNX).
+// This prevents concurrent requests from overwriting a counter already initialised
+// by a racing goroutine.
 func (r *seatRepository) SetBooked(ctx context.Context, eventID int64, booked int64) error {
-	return r.rdb.Set(ctx, bookedKey(eventID), booked, 0).Err()
+	err := r.rdb.SetArgs(ctx, bookedKey(eventID), booked, redis.SetArgs{
+		Mode: "NX",
+		TTL:  seatTTL,
+	}).Err()
+	if err == redis.Nil {
+		return nil // already set by a concurrent request, that's fine
+	}
+	return err
 }
 
 func (r *seatRepository) IncrementBooked(ctx context.Context, eventID int64) error {
 	return r.rdb.Incr(ctx, bookedKey(eventID)).Err()
+}
+
+func initLockKey(eventID int64) string {
+	return fmt.Sprintf("init_lock:%d", eventID)
+}
+
+// TryAcquireInitLock uses SETNX with a short TTL so only one goroutine among
+// many concurrent arrivals performs the expensive DB seed query.
+func (r *seatRepository) TryAcquireInitLock(ctx context.Context, eventID int64) (bool, error) {
+	ok, err := r.rdb.SetNX(ctx, initLockKey(eventID), 1, 10*time.Second).Result()
+	return ok, err
 }

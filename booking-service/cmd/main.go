@@ -30,7 +30,7 @@ func main() {
 	}
 	defer sqlDB.Close()
 
-	if err := db.AutoMigrate(&model.Booking{}); err != nil {
+	if err := db.AutoMigrate(&model.Booking{}, &model.WaitlistEntry{}); err != nil {
 		log.Fatal(err)
 	}
 
@@ -42,11 +42,14 @@ func main() {
 	queueRepo := repository.NewQueueRepository(rdb)
 	seatRepo := repository.NewSeatRepository(rdb)
 	bookingRepo := repository.NewBookingRepository(db)
+	waitlistRepo := repository.NewWaitlistRepository(db)
 	eventClient := client.NewEventClient(cfg.EventServiceURL)
 
-	bookingSvc := service.NewBookingService(bookingRepo, queueRepo, seatRepo, eventClient)
+	bookingSvc := service.NewBookingService(bookingRepo, waitlistRepo, queueRepo, seatRepo, eventClient)
 
-	app := fiber.New()
+	app := fiber.New(fiber.Config{
+		BodyLimit: 4 * 1024, // 4 KB
+	})
 	bookinghttp.NewRouter(app, bookingSvc)
 
 	quit := make(chan os.Signal, 1)

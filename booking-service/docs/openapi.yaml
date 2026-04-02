@@ -1,15 +1,33 @@
 openapi: 3.0.3
 info:
   title: Booking Service
+  description: |
+    Event booking microservice with seat limiting, waitlist, and concurrency safety.
+
+    ## Booking flow
+    1. `POST /bookings` — tries to claim a seat.
+       - Seat available → returns `status: confirmed` with a `Booking` object.
+       - Event full → caller is added to the waitlist and returns `status: waitlisted`
+         with a `WaitlistEntry` object. No error is raised.
+
+    ## Concurrency safety
+    - Seat counter is kept in Redis (`DECR` is atomic).
+    - Cancel + promote runs inside a single PostgreSQL transaction with
+      `SELECT … FOR UPDATE SKIP LOCKED` to prevent concurrent double-promotions.
+    - Unique DB constraint on `(event_id, uid)` prevents double-booking at
+      the persistence layer.
   version: 1.0.0
 
 servers:
   - url: http://localhost:8082/api/v1
 
+security:
+  - ApiKeyAuth: []
+
 paths:
   /bookings:
     post:
-      summary: Book an event
+      summary: Book an event (confirmed or waitlisted)
       operationId: bookEvent
       requestBody:
         required: true
@@ -17,15 +35,63 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateBookingRequest"
+            example:
+              event_id: 1
+              user_name: "Somchai Jaidee"
+              user_email: "somchai@example.com"
+              user_phone: "0812345678"
       responses:
         "201":
-          description: Booking created (confirmed or waitlisted)
+          description: |
+            Booking created. `status` is either `"confirmed"` or `"waitlisted"`.
+            Only the matching field (`booking` or `waitlist_entry`) is populated.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Booking"
+                $ref: "#/components/schemas/BookEventResult"
+              examples:
+                confirmed:
+                  summary: Seat available — confirmed
+                  value:
+                    status: "confirmed"
+                    booking:
+                      id: 42
+                      event_id: 1
+                      uid: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+                      status: "confirmed"
+                      seat_number: 7
+                      created_at: "2026-04-01T10:00:00Z"
+                waitlisted:
+                  summary: Event full — added to waitlist
+                  value:
+                    status: "waitlisted"
+                    waitlist_entry:
+                      id: 5
+                      event_id: 1
+                      uid: "b1ffcd88-1a2b-4c3d-9e0f-7a8b9c0d1e2f"
+                      position: 3
+                      status: "waiting"
+                      created_at: "2026-04-01T10:00:01Z"
         "400":
-          description: Bad request
+          description: Bad request (missing or invalid fields)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized — missing or invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Event not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Conflict — user already has a confirmed booking or is already on the waitlist
           content:
             application/json:
               schema:
@@ -37,12 +103,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /bookings/user/{userID}:
+
+  /bookings/user/{uid}:
     get:
-      summary: Get booking by user ID
-      operationId: getUserBooking
+      summary: Get all bookings for a user
+      operationId: getUserBookings
       parameters:
-        - name: userID
+        - name: uid
           in: path
           required: true
           schema:
@@ -51,13 +118,27 @@ paths:
             example: "550e8400-e29b-41d4-a716-446655440000"
       responses:
         "200":
-          description: Booking detail
+          description: List of bookings (may be empty)
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Booking"
-        "404":
-          description: Booking not found
+                type: array
+                items:
+                  $ref: "#/components/schemas/Booking"
+        "400":
+          description: Invalid user ID format
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
           content:
             application/json:
               schema:
@@ -77,13 +158,19 @@ paths:
             example: 1
       responses:
         "200":
-          description: List of bookings
+          description: List of bookings (may be empty)
           content:
             application/json:
               schema:
                 type: array
                 items:
                   $ref: "#/components/schemas/Booking"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Internal server error
           content:
@@ -92,14 +179,16 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
 
 components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
   schemas:
     CreateBookingRequest:
       type: object
-      required:
-        - event_id
-        - user_name
-        - user_email
-        - user_phone
+      required: [event_id, user_name, user_email, user_phone]
       properties:
         event_id:
           type: integer
@@ -107,14 +196,26 @@ components:
           example: 1
         user_name:
           type: string
-          example: "John Doe"
+          example: "Somchai Jaidee"
         user_email:
           type: string
           format: email
-          example: "john@example.com"
+          example: "somchai@example.com"
         user_phone:
           type: string
           example: "0812345678"
+
+    BookEventResult:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [confirmed, waitlisted]
+        booking:
+          $ref: "#/components/schemas/Booking"
+        waitlist_entry:
+          $ref: "#/components/schemas/WaitlistEntry"
 
     Booking:
       type: object
@@ -122,15 +223,14 @@ components:
         id:
           type: integer
           format: int64
-          example: 1
+          example: 42
         event_id:
           type: integer
           format: int64
           example: 1
-        user_id:
+        uid:
           type: string
           format: uuid
-          example: "550e8400-e29b-41d4-a716-446655440000"
         status:
           type: string
           enum: [confirmed, waitlisted, cancelled]
@@ -139,7 +239,43 @@ components:
           type: integer
           format: int32
           nullable: true
+          example: 7
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    WaitlistEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
           example: 5
+        event_id:
+          type: integer
+          format: int64
+          example: 1
+        uid:
+          type: string
+          format: uuid
+        user_name:
+          type: string
+          example: "Somchai Jaidee"
+        user_email:
+          type: string
+          format: email
+        user_phone:
+          type: string
+        position:
+          type: integer
+          format: int32
+          example: 3
+          description: 1-based rank in the waitlist at insertion time
+        status:
+          type: string
+          enum: [waiting, promoted, cancelled]
+          example: "waiting"
         created_at:
           type: string
           format: date-time
@@ -150,4 +286,4 @@ components:
       properties:
         error:
           type: string
-          example: "event is busy, please try again"
+          example: "already booked this event"
