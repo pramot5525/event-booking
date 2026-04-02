@@ -101,59 +101,79 @@ func (s *bookingService) BookEvent(request *model.CreateBookingRequest) (*BookEv
 
 	uid := uuid.NewSHA1(bookingNamespace, []byte(request.UserEmail))
 
-	// Fast-path duplicate check (authoritative guard is the DB unique constraint).
-	exists, err := s.bookingRepo.ExistsByEventAndUID(request.EventID, uid)
+	if err := s.checkDuplicates(request.EventID, uid); err != nil {
+		return nil, err
+	}
+
+	if err := s.initSeatCounter(ctx, request.EventID, event.SeatLimit); err != nil {
+		return nil, err
+	}
+
+	remaining, err := s.seatRepo.Decrement(ctx, request.EventID)
 	if err != nil {
-		return nil, fmt.Errorf("check duplicate booking: %w", err)
-	}
-	if exists {
-		return nil, ErrAlreadyBooked
+		return nil, fmt.Errorf("claim seat: %w", err)
 	}
 
-	// Check waitlist duplicate.
-	onWaitlist, err := s.waitlistRepo.ExistsByEventAndUser(request.EventID, uid)
-	if err != nil {
-		return nil, fmt.Errorf("check duplicate waitlist: %w", err)
-	}
-	if onWaitlist {
-		return nil, ErrAlreadyWaitlisted
-	}
-
-	// Initialise seat counter from DB on first request for this event.
-	booked, err := s.seatRepo.GetBooked(ctx, request.EventID)
-	if err != nil && err != redis.Nil {
-		return nil, fmt.Errorf("get booked: %w", err)
-	}
-	if err == redis.Nil {
-		count, err := s.bookingRepo.CountConfirmedByEventID(request.EventID)
-		if err != nil {
-			return nil, fmt.Errorf("count confirmed bookings: %w", err)
-		}
-		booked = count
-		if err := s.seatRepo.SetBooked(ctx, request.EventID, booked); err != nil {
-			return nil, fmt.Errorf("set booked: %w", err)
-		}
-	}
-
-	available := int32(event.SeatLimit) - int32(booked)
-	if err := s.seatRepo.Init(ctx, request.EventID, available); err != nil {
-		return nil, fmt.Errorf("init seat counter: %w", err)
-	}
-
-	// Atomically claim one seat.
-	newRemaining, err := s.seatRepo.Decrement(ctx, request.EventID)
-	if err != nil {
-		return nil, fmt.Errorf("decrement seat: %w", err)
-	}
-
-	if newRemaining < 0 {
-		// No seats available — add to waitlist.
-		_ = s.seatRepo.Increment(ctx, request.EventID)
+	if remaining < 0 {
+		_ = s.seatRepo.Increment(ctx, request.EventID) // release the over-claimed slot
 		return s.addToWaitlist(request, uid)
 	}
 
-	// Seat claimed — persist the booking.
-	seatNum := int32(event.SeatLimit) - int32(newRemaining)
+	return s.persistConfirmedBooking(ctx, request, uid, event.SeatLimit, remaining)
+}
+
+// checkDuplicates returns ErrAlreadyBooked or ErrAlreadyWaitlisted if the user
+// already has a record for this event. The DB unique constraint is the
+// authoritative guard; this is a fast-path pre-check.
+func (s *bookingService) checkDuplicates(eventID int64, uid uuid.UUID) error {
+	exists, err := s.bookingRepo.ExistsByEventAndUID(eventID, uid)
+	if err != nil {
+		return fmt.Errorf("check duplicate booking: %w", err)
+	}
+	if exists {
+		return ErrAlreadyBooked
+	}
+
+	onWaitlist, err := s.waitlistRepo.ExistsByEventAndUser(eventID, uid)
+	if err != nil {
+		return fmt.Errorf("check duplicate waitlist: %w", err)
+	}
+	if onWaitlist {
+		return ErrAlreadyWaitlisted
+	}
+
+	return nil
+}
+
+// initSeatCounter ensures the Redis seat counter exists for the event.
+// On the very first request it seeds the counter from the confirmed booking
+// count in the DB; subsequent calls are no-ops (SETNX semantics in Init).
+func (s *bookingService) initSeatCounter(ctx context.Context, eventID int64, seatLimit int32) error {
+	booked, err := s.seatRepo.GetBooked(ctx, eventID)
+	if err != nil && err != redis.Nil {
+		return fmt.Errorf("get booked count: %w", err)
+	}
+	if err == redis.Nil {
+		booked, err = s.bookingRepo.CountConfirmedByEventID(eventID)
+		if err != nil {
+			return fmt.Errorf("count confirmed bookings: %w", err)
+		}
+		if err := s.seatRepo.SetBooked(ctx, eventID, booked); err != nil {
+			return fmt.Errorf("set booked count: %w", err)
+		}
+	}
+
+	available := int32(seatLimit) - int32(booked)
+	if err := s.seatRepo.Init(ctx, eventID, available); err != nil {
+		return fmt.Errorf("init seat counter: %w", err)
+	}
+	return nil
+}
+
+// persistConfirmedBooking saves the booking record and enqueues it for
+// downstream processing. On DB failure it rolls back the claimed seat slot.
+func (s *bookingService) persistConfirmedBooking(ctx context.Context, request *model.CreateBookingRequest, uid uuid.UUID, seatLimit int32, remaining int64) (*BookEventResult, error) {
+	seatNum := int32(seatLimit) - int32(remaining)
 	booking := &model.Booking{
 		EventID:    request.EventID,
 		UID:        uid,
@@ -165,7 +185,7 @@ func (s *bookingService) BookEvent(request *model.CreateBookingRequest) (*BookEv
 	}
 
 	if err := s.bookingRepo.CreateBooking(booking); err != nil {
-		_ = s.seatRepo.Increment(ctx, request.EventID)
+		_ = s.seatRepo.Increment(ctx, request.EventID) // roll back the claimed slot
 		if isUniqueViolation(err) {
 			return nil, ErrAlreadyBooked
 		}
