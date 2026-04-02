@@ -3,11 +3,9 @@ package handler
 import (
 	"booking-service/internal/model"
 	"booking-service/internal/pkg/validate"
-	"booking-service/internal/repository"
 	"booking-service/internal/service"
 	"errors"
 	"log"
-	"strconv"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -56,34 +54,13 @@ func (h *bookingHandler) BookEvent(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(result)
 }
 
-func (h *bookingHandler) CancelBooking(c *fiber.Ctx) error {
-	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid booking id"})
-	}
-
-	if err := h.bookingService.CancelBooking(id); err != nil {
-		switch {
-		case errors.Is(err, repository.ErrBookingNotFound):
-			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": err.Error()})
-		case errors.Is(err, repository.ErrAlreadyCancelled):
-			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": err.Error()})
-		default:
-			log.Printf("cancel booking error: %v", err)
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal server error"})
-		}
-	}
-
-	return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "booking cancelled"})
-}
-
 func (h *bookingHandler) GetUserBookings(c *fiber.Ctx) error {
-	userID := c.Params("userID")
+	uid := c.Params("uid")
 
-	bookings, err := h.bookingService.GetUserBookings(userID)
+	bookings, err := h.bookingService.GetUserBookings(uid)
 	if err != nil {
-		if errors.Is(err, service.ErrInvalidUserID) {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid user_id"})
+		if errors.Is(err, service.ErrInvalidUID) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid uid"})
 		}
 		log.Printf("get user bookings error: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal server error"})

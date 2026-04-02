@@ -17,6 +17,10 @@ type CachedEvent struct {
 	SeatLimit int32 `json:"seat_limit"`
 }
 
+type seatRepository struct {
+	rdb *redis.Client
+}
+
 type SeatRepository interface {
 	Init(ctx context.Context, eventID int64, available int32) error
 	Remaining(ctx context.Context, eventID int64) (int64, error)
@@ -27,10 +31,6 @@ type SeatRepository interface {
 	GetBooked(ctx context.Context, eventID int64) (int64, error)
 	SetBooked(ctx context.Context, eventID int64, booked int64) error
 	IncrementBooked(ctx context.Context, eventID int64) error
-}
-
-type seatRepository struct {
-	rdb *redis.Client
 }
 
 func NewSeatRepository(rdb *redis.Client) SeatRepository {

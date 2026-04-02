@@ -1,9 +1,10 @@
 import http from "k6/http";
-import { check, sleep } from "k6";
+import { check } from "k6";
 import { Counter, Rate } from "k6/metrics";
 
 // ── Custom metrics ────────────────────────────────────────────────────────────
 const confirmedCount  = new Counter("bookings_confirmed");
+const waitlistedCount = new Counter("bookings_waitlisted");
 const errorCount      = new Counter("bookings_error");
 const successRate     = new Rate("booking_success_rate");
 
@@ -11,7 +12,7 @@ const successRate     = new Rate("booking_success_rate");
 const EVENT_SERVICE_URL  = __ENV.EVENT_SERVICE_URL  || "http://localhost:8081";
 const BOOKING_SERVICE_URL = __ENV.BOOKING_SERVICE_URL || "http://localhost:8082";
 const SEAT_LIMIT          = parseInt(__ENV.SEAT_LIMIT || "100");
-const CONCURRENT_USERS    = 2000;
+const CONCURRENT_USERS    = parseInt(__ENV.CONCURRENT_USERS || "2000");
 
 export const options = {
   scenarios: {
@@ -23,10 +24,12 @@ export const options = {
     },
   },
   thresholds: {
-    // confirmed bookings must not exceed seat limit
-    bookings_confirmed: [`count<=${SEAT_LIMIT}`],
-    // expect many failures when overbooking (no waitlist)
-    http_req_failed: ["rate<0.96"], // allow ~95% failures for overbooking
+    bookings_confirmed: [`count==${SEAT_LIMIT}`],
+    bookings_waitlisted: [`count==${CONCURRENT_USERS - SEAT_LIMIT}`],
+    bookings_error: ["count==0"],
+    booking_success_rate: ["rate==1.0"],
+    http_req_failed: ["rate==0"],
+    http_req_duration: ["p(95)<750"],
   },
 };
 
@@ -71,22 +74,36 @@ export default function (data) {
   });
 
   const ok = check(res, {
-    "status 201 or 500": (r) => r.status === 201 || r.status === 500,
+    "status 201": (r) => r.status === 201,
   });
 
-  if (res.status === 201) {
-    const body = JSON.parse(res.body);
-    if (body.status === "confirmed") {
-      confirmedCount.add(1);
-    }
-    successRate.add(true);
-  } else if (res.status === 500) {
+  if (!ok) {
     errorCount.add(1);
-    successRate.add(false); // or true? since expected
-  } else {
     successRate.add(false);
     console.error(`VU ${__VU} failed: ${res.status} ${res.body}`);
+    return;
   }
+
+  const body = JSON.parse(res.body);
+  check(body, {
+    "booking status is confirmed or waitlisted": (b) =>
+      b.status === "confirmed" || b.status === "waitlisted",
+  });
+
+  if (body.status === "confirmed") {
+    confirmedCount.add(1);
+    successRate.add(true);
+    return;
+  }
+  if (body.status === "waitlisted") {
+    waitlistedCount.add(1);
+    successRate.add(true);
+    return;
+  }
+
+  errorCount.add(1);
+  successRate.add(false);
+  console.error(`VU ${__VU} unexpected body: ${res.body}`);
 }
 
 // ── Teardown: print summary ───────────────────────────────────────────────────
@@ -95,7 +112,8 @@ export function teardown(data) {
   console.log(`Event ID    : ${data.eventId}`);
   console.log(`Seat Limit  : ${SEAT_LIMIT}`);
   console.log(`Total VUs   : ${CONCURRENT_USERS}`);
-  console.log(`Expected Confirmed: ${SEAT_LIMIT}`);
-  console.log(`Expected Errors: ${CONCURRENT_USERS - SEAT_LIMIT}`);
+  console.log(`Expected Confirmed : ${SEAT_LIMIT}`);
+  console.log(`Expected Waitlisted: ${CONCURRENT_USERS - SEAT_LIMIT}`);
+  console.log(`Expected Errors    : 0`);
   console.log(`==========================================`);
 }

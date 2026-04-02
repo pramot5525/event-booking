@@ -24,7 +24,7 @@ var (
 	ErrAlreadyBooked     = errors.New("already booked this event")
 	ErrAlreadyWaitlisted = errors.New("already on the waitlist for this event")
 	ErrEventNotFound     = errors.New("event not found")
-	ErrInvalidUserID     = errors.New("invalid user_id")
+	ErrInvalidUID        = errors.New("invalid uid")
 )
 
 // BookEventResult is returned by BookEvent. Status is either "confirmed" or
@@ -37,8 +37,7 @@ type BookEventResult struct {
 
 type BookingService interface {
 	BookEvent(request *model.CreateBookingRequest) (*BookEventResult, error)
-	CancelBooking(bookingID int64) error
-	GetUserBookings(userID string) ([]*model.Booking, error)
+	GetUserBookings(uid string) ([]*model.Booking, error)
 	GetEventBookings(eventID string) ([]*model.Booking, error)
 }
 
@@ -100,10 +99,10 @@ func (s *bookingService) BookEvent(request *model.CreateBookingRequest) (*BookEv
 		return nil, err
 	}
 
-	userID := uuid.NewSHA1(bookingNamespace, []byte(request.UserEmail))
+	uid := uuid.NewSHA1(bookingNamespace, []byte(request.UserEmail))
 
 	// Fast-path duplicate check (authoritative guard is the DB unique constraint).
-	exists, err := s.bookingRepo.ExistsByEventAndUser(request.EventID, userID)
+	exists, err := s.bookingRepo.ExistsByEventAndUID(request.EventID, uid)
 	if err != nil {
 		return nil, fmt.Errorf("check duplicate booking: %w", err)
 	}
@@ -112,7 +111,7 @@ func (s *bookingService) BookEvent(request *model.CreateBookingRequest) (*BookEv
 	}
 
 	// Check waitlist duplicate.
-	onWaitlist, err := s.waitlistRepo.ExistsByEventAndUser(request.EventID, userID)
+	onWaitlist, err := s.waitlistRepo.ExistsByEventAndUser(request.EventID, uid)
 	if err != nil {
 		return nil, fmt.Errorf("check duplicate waitlist: %w", err)
 	}
@@ -148,16 +147,19 @@ func (s *bookingService) BookEvent(request *model.CreateBookingRequest) (*BookEv
 	}
 
 	if newRemaining < 0 {
-		// No seat — return the counter and add the user to the waitlist.
+		// No seats available — add to waitlist.
 		_ = s.seatRepo.Increment(ctx, request.EventID)
-		return s.addToWaitlist(request, userID)
+		return s.addToWaitlist(request, uid)
 	}
 
 	// Seat claimed — persist the booking.
 	seatNum := int32(event.SeatLimit) - int32(newRemaining)
 	booking := &model.Booking{
 		EventID:    request.EventID,
-		UserID:     userID,
+		UID:        uid,
+		UserName:   request.UserName,
+		UserEmail:  request.UserEmail,
+		UserPhone:  request.UserPhone,
 		Status:     model.BookingStatusConfirmed,
 		SeatNumber: &seatNum,
 	}
@@ -176,10 +178,7 @@ func (s *bookingService) BookEvent(request *model.CreateBookingRequest) (*BookEv
 	return &BookEventResult{Status: "confirmed", Booking: booking}, nil
 }
 
-func (s *bookingService) addToWaitlist(
-	request *model.CreateBookingRequest,
-	userID uuid.UUID,
-) (*BookEventResult, error) {
+func (s *bookingService) addToWaitlist(request *model.CreateBookingRequest, uid uuid.UUID) (*BookEventResult, error) {
 	position, err := s.waitlistRepo.CountWaiting(request.EventID)
 	if err != nil {
 		return nil, fmt.Errorf("count waitlist: %w", err)
@@ -187,7 +186,7 @@ func (s *bookingService) addToWaitlist(
 
 	entry := &model.WaitlistEntry{
 		EventID:   request.EventID,
-		UserID:    userID,
+		UID:       uid,
 		UserName:  request.UserName,
 		UserEmail: request.UserEmail,
 		UserPhone: request.UserPhone,
@@ -204,47 +203,12 @@ func (s *bookingService) addToWaitlist(
 	return &BookEventResult{Status: "waitlisted", WaitlistEntry: entry}, nil
 }
 
-// CancelBooking cancels a confirmed booking and promotes the next waiting user
-// (if any) into that seat atomically. If no one is waiting the seat is freed
-// back into the Redis counter.
-func (s *bookingService) CancelBooking(bookingID int64) error {
-	ctx := context.Background()
-
-	// Pre-flight: verify the booking exists and is confirmed.
-	booking, err := s.bookingRepo.GetByID(bookingID)
+func (s *bookingService) GetUserBookings(u string) ([]*model.Booking, error) {
+	uid, err := uuid.Parse(u)
 	if err != nil {
-		return err // ErrBookingNotFound is already wrapped
+		return nil, ErrInvalidUID
 	}
-	if booking.Status == model.BookingStatusCancelled {
-		return repository.ErrAlreadyCancelled
-	}
-
-	// Atomically cancel and maybe promote (single DB transaction).
-	promoted, newBooking, err := s.bookingRepo.CancelAndMaybePromote(bookingID)
-	if err != nil {
-		return fmt.Errorf("cancel booking: %w", err)
-	}
-
-	if promoted == nil {
-		// No one was waiting — free the seat in Redis.
-		if incrErr := s.seatRepo.Increment(ctx, booking.EventID); incrErr != nil {
-			log.Printf("warning: failed to increment seat counter for event %d: %v", booking.EventID, incrErr)
-		}
-	} else {
-		// A waitlisted user was promoted — notify them.
-		s.enqueue(newBooking)
-		log.Printf("waitlist promotion: entry %d → booking %d (event %d)", promoted.ID, newBooking.ID, booking.EventID)
-	}
-
-	return nil
-}
-
-func (s *bookingService) GetUserBookings(userID string) ([]*model.Booking, error) {
-	uid, err := uuid.Parse(userID)
-	if err != nil {
-		return nil, ErrInvalidUserID
-	}
-	return s.bookingRepo.GetBookingsByUserID(uid)
+	return s.bookingRepo.GetBookingsByUID(uid)
 }
 
 func (s *bookingService) GetEventBookings(eventID string) ([]*model.Booking, error) {
@@ -261,7 +225,7 @@ func (s *bookingService) enqueue(booking *model.Booking) {
 		log.Printf("warning: failed to marshal booking %d for queue: %v", booking.ID, err)
 		return
 	}
-	if err := s.queueRepo.Enqueue(context.Background(), string(payload)); err != nil {
+	if err := s.queueRepo.Enqueue(context.Background(), booking.EventID, string(payload)); err != nil {
 		log.Printf("warning: failed to enqueue booking %d: %v", booking.ID, err)
 	}
 }

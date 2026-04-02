@@ -9,14 +9,12 @@ info:
        - Seat available → returns `status: confirmed` with a `Booking` object.
        - Event full → caller is added to the waitlist and returns `status: waitlisted`
          with a `WaitlistEntry` object. No error is raised.
-    2. `DELETE /bookings/{id}` — cancels a confirmed booking and atomically
-       promotes the next waiting user (if any) into that seat.
 
     ## Concurrency safety
     - Seat counter is kept in Redis (`DECR` is atomic).
     - Cancel + promote runs inside a single PostgreSQL transaction with
       `SELECT … FOR UPDATE SKIP LOCKED` to prevent concurrent double-promotions.
-    - Unique DB constraint on `(event_id, user_id)` prevents double-booking at
+    - Unique DB constraint on `(event_id, uid)` prevents double-booking at
       the persistence layer.
   version: 1.0.0
 
@@ -59,7 +57,7 @@ paths:
                     booking:
                       id: 42
                       event_id: 1
-                      user_id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+                      uid: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
                       status: "confirmed"
                       seat_number: 7
                       created_at: "2026-04-01T10:00:00Z"
@@ -70,7 +68,7 @@ paths:
                     waitlist_entry:
                       id: 5
                       event_id: 1
-                      user_id: "b1ffcd88-1a2b-4c3d-9e0f-7a8b9c0d1e2f"
+                      uid: "b1ffcd88-1a2b-4c3d-9e0f-7a8b9c0d1e2f"
                       position: 3
                       status: "waiting"
                       created_at: "2026-04-01T10:00:01Z"
@@ -105,70 +103,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /bookings/{id}:
-    delete:
-      summary: Cancel a confirmed booking
-      description: |
-        Cancels the booking and atomically promotes the next waitlisted user
-        into the freed seat (if anyone is waiting). The promotion is invisible
-        to the caller; the freed-seat logic is handled server-side.
-      operationId: cancelBooking
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
-            example: 42
-      responses:
-        "200":
-          description: Booking cancelled successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: "booking cancelled"
-        "400":
-          description: Invalid booking ID
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "404":
-          description: Booking not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "409":
-          description: Booking is already cancelled
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
 
-  /bookings/user/{userID}:
+  /bookings/user/{uid}:
     get:
       summary: Get all bookings for a user
       operationId: getUserBookings
       parameters:
-        - name: userID
+        - name: uid
           in: path
           required: true
           schema:
@@ -287,7 +228,7 @@ components:
           type: integer
           format: int64
           example: 1
-        user_id:
+        uid:
           type: string
           format: uuid
         status:
@@ -315,7 +256,7 @@ components:
           type: integer
           format: int64
           example: 1
-        user_id:
+        uid:
           type: string
           format: uuid
         user_name:

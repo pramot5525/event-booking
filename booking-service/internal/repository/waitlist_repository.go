@@ -8,12 +8,12 @@ import (
 )
 
 type WaitlistRepository interface {
-	// Add inserts a new waiting entry. The DB unique index on (event_id, user_id)
+	// Add inserts a new waiting entry. The DB unique index on (event_id, uid)
 	// prevents duplicate waitlist registrations.
 	Add(entry *model.WaitlistEntry) error
 
 	// ExistsByEventAndUser reports whether the user is already on the waitlist.
-	ExistsByEventAndUser(eventID int64, userID uuid.UUID) (bool, error)
+	ExistsByEventAndUser(eventID int64, uid uuid.UUID) (bool, error)
 
 	// CountWaiting returns how many users are ahead of position 0 (i.e. total
 	// waiting entries) for position assignment at insertion time.
@@ -21,7 +21,7 @@ type WaitlistRepository interface {
 
 	// GetPositionByUser returns the 1-based position of the user in the waitlist
 	// (number of older 'waiting' entries + 1).
-	GetPositionByUser(eventID int64, userID uuid.UUID) (int32, error)
+	GetPositionByUser(eventID int64, uid uuid.UUID) (int32, error)
 }
 
 type waitlistRepository struct {
@@ -36,10 +36,10 @@ func (r *waitlistRepository) Add(entry *model.WaitlistEntry) error {
 	return r.db.Create(entry).Error
 }
 
-func (r *waitlistRepository) ExistsByEventAndUser(eventID int64, userID uuid.UUID) (bool, error) {
+func (r *waitlistRepository) ExistsByEventAndUser(eventID int64, uid uuid.UUID) (bool, error) {
 	var count int64
 	err := r.db.Model(&model.WaitlistEntry{}).
-		Where("event_id = ? AND user_id = ? AND status = ?", eventID, userID, model.WaitlistStatusWaiting).
+		Where("event_id = ? AND uid = ? AND status = ?", eventID, uid, model.WaitlistStatusWaiting).
 		Count(&count).Error
 	return count > 0, err
 }
@@ -52,10 +52,10 @@ func (r *waitlistRepository) CountWaiting(eventID int64) (int32, error) {
 	return int32(count), err
 }
 
-func (r *waitlistRepository) GetPositionByUser(eventID int64, userID uuid.UUID) (int32, error) {
+func (r *waitlistRepository) GetPositionByUser(eventID int64, uid uuid.UUID) (int32, error) {
 	// Position = number of waiting entries older than this user's entry + 1.
 	var entry model.WaitlistEntry
-	if err := r.db.Where("event_id = ? AND user_id = ?", eventID, userID).
+	if err := r.db.Where("event_id = ? AND uid = ?", eventID, uid).
 		First(&entry).Error; err != nil {
 		return 0, err
 	}

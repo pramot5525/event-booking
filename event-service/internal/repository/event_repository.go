@@ -24,7 +24,7 @@ func NewEventRepository(db *gorm.DB) *eventRepository {
 
 func (r *eventRepository) GetAll() ([]*model.Event, error) {
 	var events []*model.Event
-	err := r.db.Find(&events).Error
+	err := r.db.Order("id DESC").Find(&events).Error
 	return events, err
 }
 

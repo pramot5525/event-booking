@@ -20,7 +20,7 @@ const (
 type WaitlistEntry struct {
 	ID        int64          `json:"id" gorm:"primaryKey;autoIncrement"`
 	EventID   int64          `json:"event_id" gorm:"uniqueIndex:idx_waitlist_event_user;index"`
-	UserID    uuid.UUID      `json:"user_id" gorm:"uniqueIndex:idx_waitlist_event_user"`
+	UID       uuid.UUID      `json:"uid" gorm:"uniqueIndex:idx_waitlist_event_user"`
 	UserName  string         `json:"user_name"`
 	UserEmail string         `json:"user_email"`
 	UserPhone string         `json:"user_phone"`

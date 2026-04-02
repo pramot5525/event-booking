@@ -17,7 +17,10 @@ const (
 type Booking struct {
 	ID         int64         `json:"id" gorm:"primaryKey;autoIncrement"`
 	EventID    int64         `json:"event_id" gorm:"uniqueIndex:idx_event_user"`
-	UserID     uuid.UUID     `json:"user_id"  gorm:"uniqueIndex:idx_event_user"`
+	UID        uuid.UUID     `json:"uid"  gorm:"uniqueIndex:idx_event_user"`
+	UserName   string        `json:"user_name"`
+	UserEmail  string        `json:"user_email"`
+	UserPhone  string        `json:"user_phone"`
 	Status     BookingStatus `json:"status"`
 	SeatNumber *int32        `json:"seat_number,omitempty"`
 	CreatedAt  time.Time     `json:"created_at" gorm:"autoCreateTime"`
