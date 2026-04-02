@@ -5,21 +5,14 @@ import (
 	"booking-service/internal/service"
 
 	"github.com/gofiber/fiber/v2"
-	swagger "github.com/gofiber/swagger"
 )
 
 func NewRouter(app *fiber.App, bookingService service.BookingService) {
-	app.Get("/docs/openapi.yaml", func(c *fiber.Ctx) error {
-		return c.SendFile("./docs/openapi.yaml")
-	})
-	app.Get("/swagger/*", swagger.New(swagger.Config{
-		URL: "/docs/openapi.yaml",
-	}))
+	h := handler.NewBookingHandler(bookingService)
 
-	bookingHandler := handler.NewBookingHandler(bookingService)
+	app.Get("/health", h.Health)
 
 	v1 := app.Group("/api/v1")
-	v1.Post("/bookings", bookingHandler.BookEvent)
-	v1.Get("/bookings/user/:uid", bookingHandler.GetUserBookings)
-	v1.Get("/bookings/event/:eventID", bookingHandler.GetEventBookings)
+	v1.Post("/bookings", h.BookSeat)
+	v1.Post("/bookings/quota/init", h.InitializeQuota)
 }

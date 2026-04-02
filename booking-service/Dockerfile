@@ -1,21 +1,17 @@
-FROM golang:1.24-alpine AS builder
+FROM golang:1.22-alpine AS builder
 
 WORKDIR /app
 
-COPY go.mod go.sum ./
+COPY go.mod go.sum* ./
 RUN go mod download
 
 COPY . .
-RUN go build -o server ./cmd/main.go
+RUN go build -o booking-service ./cmd
 
-
-FROM alpine:3.21
+FROM alpine:3.20
 
 WORKDIR /app
-
-COPY --from=builder /app/server .
-COPY --from=builder /app/docs ./docs
+COPY --from=builder /app/booking-service /app/booking-service
 
 EXPOSE 8082
-
-CMD ["./server"]
+CMD ["/app/booking-service"]

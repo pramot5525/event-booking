@@ -2,24 +2,27 @@ package main
 
 import (
 	"booking-service/config"
-	"booking-service/internal/client"
-	bookinghttp "booking-service/internal/http"
+	httpAdapter "booking-service/internal/http"
 	"booking-service/internal/model"
 	"booking-service/internal/pkg/database"
 	"booking-service/internal/repository"
 	"booking-service/internal/service"
+	"context"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	_ = godotenv.Load()
 	cfg := config.Load()
 
-	db, err := database.NewPostgres(cfg.DB.DSN())
+	db, err := database.NewPostgres(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -30,34 +33,30 @@ func main() {
 	}
 	defer sqlDB.Close()
 
-	if err := db.AutoMigrate(&model.Booking{}, &model.WaitlistEntry{}); err != nil {
-		log.Fatal(err)
-	}
-
-	rdb, err := database.NewRedis(cfg.RDB.Host, cfg.RDB.Port, cfg.RDB.User, cfg.RDB.Password, cfg.RDB.Name)
+	rdb, err := database.NewRedis(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer rdb.Close()
 
-	queueRepo := repository.NewQueueRepository(rdb)
-	seatRepo := repository.NewSeatRepository(rdb)
+	if err := db.AutoMigrate(&model.Booking{}); err != nil {
+		log.Fatal(err)
+	}
+
 	bookingRepo := repository.NewBookingRepository(db)
-	waitlistRepo := repository.NewWaitlistRepository(db)
-	eventClient := client.NewEventClient(cfg.EventServiceURL)
+	eventClient := service.NewEventClient(cfg.EventServiceURL)
+	bookingService := service.NewBookingService(bookingRepo, rdb, eventClient, cfg)
 
-	bookingSvc := service.NewBookingService(bookingRepo, waitlistRepo, queueRepo, seatRepo, eventClient)
-
-	app := fiber.New(fiber.Config{
-		BodyLimit: 4 * 1024, // 4 KB
-	})
-	bookinghttp.NewRouter(app, bookingSvc)
+	app := fiber.New()
+	httpAdapter.NewRouter(app, bookingService)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-quit
-		log.Println("shutting down...")
-		_ = app.Shutdown()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = app.ShutdownWithContext(ctx)
 	}()
 
 	log.Fatal(app.Listen(":" + cfg.AppPort))

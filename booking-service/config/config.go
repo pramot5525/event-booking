@@ -3,22 +3,17 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"time"
 )
 
 type Config struct {
 	AppPort         string
-	APIKey          string
-	DB              DBConfig
-	RDB             RDBConfig
+	BookingLockTTL  time.Duration
+	RedisQuotaTTL   time.Duration
 	EventServiceURL string
-}
-
-type RDBConfig struct {
-	Host     string
-	Port     string
-	User     string
-	Password string
-	Name     string
+	DB              DBConfig
+	Redis           RedisConfig
 }
 
 type DBConfig struct {
@@ -29,15 +24,33 @@ type DBConfig struct {
 	Name     string
 }
 
+type RedisConfig struct {
+	Host     string
+	Port     string
+	Password string
+	DB       int
+}
+
 func (d DBConfig) DSN() string {
-	return fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable search_path=public",
-		d.Host, d.User, d.Password, d.Name, d.Port)
+	return fmt.Sprintf(
+		"host=%s user=%s password=%s dbname=%s port=%s sslmode=disable search_path=public",
+		d.Host,
+		d.User,
+		d.Password,
+		d.Name,
+		d.Port,
+	)
+}
+
+func (r RedisConfig) Addr() string {
+	return fmt.Sprintf("%s:%s", r.Host, r.Port)
 }
 
 func Load() *Config {
 	return &Config{
 		AppPort:         getEnv("SERVER_PORT", "8082"),
-		APIKey:          getEnv("API_KEY", ""),
+		BookingLockTTL:  getDurationEnv("BOOKING_LOCK_TTL", time.Minute),
+		RedisQuotaTTL:   getDurationEnv("REDIS_QUOTA_TTL", 24*time.Hour),
 		EventServiceURL: getEnv("EVENT_SERVICE_URL", "http://localhost:8081"),
 		DB: DBConfig{
 			Host:     getEnv("POSTGRES_HOST", "localhost"),
@@ -46,19 +59,43 @@ func Load() *Config {
 			Password: getEnv("POSTGRES_PASSWORD", "eventbooking"),
 			Name:     getEnv("POSTGRES_DB", "eventdb"),
 		},
-		RDB: RDBConfig{
+		Redis: RedisConfig{
 			Host:     getEnv("REDIS_HOST", "localhost"),
 			Port:     getEnv("REDIS_PORT", "6379"),
-			User:     getEnv("REDIS_USER", ""),
 			Password: getEnv("REDIS_PASSWORD", ""),
-			Name:     getEnv("REDIS_DB", "0"),
+			DB:       getIntEnv("REDIS_DB", 0),
 		},
 	}
 }
 
 func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
 	}
-	return fallback
+	return v
+}
+
+func getIntEnv(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func getDurationEnv(key string, fallback time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return fallback
+	}
+	return d
 }
