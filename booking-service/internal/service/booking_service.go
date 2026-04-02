@@ -94,13 +94,16 @@ func (s *bookingService) InitializeQuota(ctx context.Context, eventID uint, quot
 }
 
 func (s *bookingService) BookSeat(ctx context.Context, req BookSeatRequest) (*BookSeatResult, error) {
+	// Validate required fields before doing any external calls.
 	if req.EventID == 0 || strings.TrimSpace(req.UserEmail) == "" || strings.TrimSpace(req.UserName) == "" {
 		return nil, ErrInvalidRequest
 	}
 
+	// Build a deterministic user ID from email for idempotency and uniqueness checks.
 	userID := stableUserID(req.UserEmail)
 	lockKey := lockRedisKey(req.EventID, userID)
 
+	// Acquire short-lived lock to prevent duplicate concurrent bookings per user/event.
 	ok, err := s.rdb.SetNX(ctx, lockKey, "1", s.lockTTL).Result()
 	if err != nil {
 		return nil, fmt.Errorf("create idempotency lock: %w", err)
@@ -110,6 +113,7 @@ func (s *bookingService) BookSeat(ctx context.Context, req BookSeatRequest) (*Bo
 	}
 	defer s.rdb.Del(ctx, lockKey) // release lock on all exit paths
 
+	// Atomically consume one seat from Redis quota.
 	qKey := quotaKey(req.EventID)
 	remaining, err := luaDecrQuota.Run(ctx, s.rdb, []string{qKey}).Int64()
 	if err != nil {
@@ -119,6 +123,7 @@ func (s *bookingService) BookSeat(ctx context.Context, req BookSeatRequest) (*Bo
 		return nil, fmt.Errorf("decrement quota: %w", err)
 	}
 
+	// No seats left: assign waitlist position instead of confirming a booking.
 	if remaining < 0 {
 		waitlistEntry, err := s.createWaitlistEntry(ctx, req, userID)
 		if err != nil {
@@ -134,6 +139,7 @@ func (s *bookingService) BookSeat(ctx context.Context, req BookSeatRequest) (*Bo
 		}, nil
 	}
 
+	// Seats are available: prepare a confirmed booking record.
 	booking := &model.Booking{
 		EventID:   req.EventID,
 		UID:       userID,
@@ -143,6 +149,7 @@ func (s *bookingService) BookSeat(ctx context.Context, req BookSeatRequest) (*Bo
 		Status:    "confirmed",
 	}
 
+	// Persist booking in DB; if it fails, restore the decremented seat in Redis.
 	if err := s.repo.CreateBooking(ctx, booking); err != nil {
 		if rollbackErr := s.rdb.Incr(ctx, qKey).Err(); rollbackErr != nil {
 			log.Printf("CRITICAL: quota rollback failed for event %d user %s: %v", req.EventID, userID, rollbackErr)

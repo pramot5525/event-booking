@@ -59,6 +59,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
+                quotaNotInitialized:
+                  value:
+                    error: quota is not initialized for this event
                 inProgress:
                   value:
                     error: booking is already in progress for this user

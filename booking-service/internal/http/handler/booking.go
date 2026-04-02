@@ -3,6 +3,7 @@ package handler
 import (
 	"booking-service/internal/service"
 	"errors"
+	"log"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -43,12 +44,15 @@ func (h *BookingHandler) BookSeat(c *fiber.Ctx) error {
 		switch {
 		case errors.Is(err, service.ErrInvalidRequest):
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		case errors.Is(err, service.ErrQuotaNotInitialized):
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "quota is not initialized for this event"})
 		case errors.Is(err, service.ErrBookingInProgress):
 			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "booking is already in progress for this user"})
 		case errors.Is(err, service.ErrAlreadyBooked):
 			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "user already booked this event"})
 		default:
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "booking failed"})
+			log.Printf("booking error: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "booking failed, please try again"})
 		}
 	}
 

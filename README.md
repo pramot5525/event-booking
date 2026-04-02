@@ -109,7 +109,7 @@ Supported environment overrides:
 - `EVENT_BASE_URL` (default `http://localhost:8081`)
 - `BOOKING_BASE_URL` (default `http://localhost:8082`)
 - `EVENT_ID` (default `1`)
-- `QUOTA` (default `5000`)
+- `QUOTA` (default `50`)
 
 Example:
 
@@ -117,7 +117,7 @@ Example:
 EVENT_BASE_URL=http://localhost:8081 \
 BOOKING_BASE_URL=http://localhost:8082 \
 EVENT_ID=1 \
-QUOTA=5000 \
+QUOTA=50 \
 k6 run ./k6/concurrent_flow_test.js
 ```
 

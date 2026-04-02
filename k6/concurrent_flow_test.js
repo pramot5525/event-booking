@@ -10,7 +10,7 @@
  * Override defaults:
  *   EVENT_BASE_URL=http://localhost:8081 \
  *   BOOKING_BASE_URL=http://localhost:8082 \
- *   EVENT_ID=1 QUOTA=5000 \
+ *   EVENT_ID=1 QUOTA=50 \
  *   k6 run k6/concurrent_flow_test.js
  */
 
@@ -22,7 +22,7 @@ import { Counter, Rate, Trend } from "k6/metrics";
 const EVENT_BASE_URL = __ENV.EVENT_BASE_URL || "http://localhost:8081";
 const BOOKING_BASE_URL = __ENV.BOOKING_BASE_URL || "http://localhost:8082";
 const EVENT_ID = parseInt(__ENV.EVENT_ID || "1", 10);
-const QUOTA = parseInt(__ENV.QUOTA || "5000", 10);
+const QUOTA = parseInt(__ENV.QUOTA || "50", 10);
 
 // ── Custom metrics ────────────────────────────────────────────────────────────
 const bookingConfirmed = new Counter("booking_confirmed");
