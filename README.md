@@ -1,91 +1,128 @@
 # Event Booking System
 
-A microservice-based event booking system with concurrency-safe seat reservations and automatic waitlist management.
+Go-based microservices for event management and high-concurrency seat booking with Redis-backed quota control.
 
-## Services
+## Architecture
 
-```
-┌──────────────┐     ┌───────────────────┐     ┌─────────────────┐
-│  xxx    │────▶│  Event Service    │     │ Booking Service │
-│  xxx   │     │  (Go) :8081       │◀────│  (Go) :8082     │
-│  :xxx       │────▶│                   │     │                 │
-└──────────────┘     └───────────────────┘     └─────────────────┘
-                               │                        │
-                               ▼                        ▼
-                          PostgreSQL               PostgreSQL + Redis
-```
+The stack runs with Docker Compose:
 
-| Service | Description | Port |
-|---|---|---|
-| `event-service` | Manages event catalog (create, list, get by ID) | 8081 |
-| `booking-service` | Handles seat reservations and waitlist | 8082 |
+- event-service (Fiber, GORM, PostgreSQL, Redis cache)
+- booking-service (Fiber, GORM, PostgreSQL, Redis quota/locks)
+- postgres
+- redis
 
-## Booking Flow
+| Service | Port | Purpose |
+|---|---:|---|
+| event-service | 8081 | CRUD for events + Redis caching for read endpoints |
+| booking-service | 8082 | Booking API with atomic seat claiming and waitlist |
+| postgres | 5432 | Persistent storage |
+| redis | 6379 | Cache, quota counters, waitlist sequence, idempotency locks |
 
-```
-User submits booking
-        │
-        ▼
- booking-service
-        │
-        ├─ 1. Fetch event details from event-service (cached in Redis)
-        ├─ 2. Check for duplicate booking or waitlist entry
-        ├─ 3. Init seat counter in Redis (seeded from Postgres on first request)
-        ├─ 4. Atomically claim a seat: Redis DECR
-        │
-        ├─ Seat available (remaining ≥ 0)
-        │       └─▶ Save confirmed Booking in Postgres
-        │           Enqueue booking to Redis list for downstream processing
-        │           Return  { status: "confirmed", booking: { seat_number: N } }
-        │
-        └─ No seat (remaining < 0)
-                └─▶ Rollback: Redis INCR
-                    Save WaitlistEntry in Postgres (ordered by position)
-                    Return  { status: "waitlisted", waitlist_entry: { position: N } }
-```
+## Booking Flow (Current Implementation)
 
-**Concurrency safety**
-- Redis `DECR` is atomic — no two users can claim the same seat simultaneously.
-- A `(event_id, uid)` unique constraint in Postgres is the authoritative guard against double-booking.
-- User identity (UID) is derived from email via UUID v5, so the same email always maps to the same UID.
+1. Client calls booking-service `POST /api/v1/bookings`.
+2. booking-service validates input and creates a short idempotency lock in Redis (`SETNX`).
+3. booking-service atomically decrements seat quota in Redis via Lua script.
+4. If quota is exhausted, booking-service creates a waitlist entry with Redis-backed sequence (`event:{id}:waitlist:seq`).
+5. If quota is available, booking-service stores a confirmed booking in PostgreSQL.
+6. On DB write failure after successful decrement, quota is rolled back with Redis `INCR`.
+
+## API Endpoints
+
+### event-service (http://localhost:8081)
+
+- `GET /api/v1/events`
+- `POST /api/v1/events`
+- `GET /api/v1/events/:id`
+- `PUT /api/v1/events/:id`
+- `DELETE /api/v1/events/:id`
+- `GET /swagger/`
+- `GET /docs/openapi.yaml`
+
+### booking-service (http://localhost:8082)
+
+- `GET /health`
+- `POST /api/v1/bookings`
+- `POST /api/v1/bookings/quota/init`
+- `GET /swagger/`
+- `GET /docs/openapi.yaml`
 
 ## Run Locally
 
-**Prerequisites:** Docker and Docker Compose.
+Prerequisite: Docker + Docker Compose.
 
 ```bash
-# Start all services (Postgres, Redis, event-service, booking-service, web-app)
+# start services
 make start
 
-# Stop everything
+# stop services
 make stop
 
-# View logs
+# rebuild images
+make build
+
+# restart stack
+make restart
+
+# stream logs
 make logs
 ```
 
-Once running:
-
-| URL | Description |
-|---|---|
-| http://localhost:3000 | Web app |
-| http://localhost:8081/swagger/ | Event Service API docs |
-| http://localhost:8082/swagger/ | Booking Service API docs |
-
-## Load Testing
-
-Concurrency tests use [k6](https://k6.io). With all services running, you can run k6 via Docker:
+Direct Compose alternative:
 
 ```bash
-docker run --rm -i \
-        --add-host=host.docker.internal:host-gateway \
-        -v "${PWD}/k6:/scripts" \
-        grafana/k6 run \
-        -e EVENT_SERVICE_URL=http://host.docker.internal:8081 \
-        -e BOOKING_SERVICE_URL=http://host.docker.internal:8082 \
-        -e SEAT_LIMIT=100 \
-        -e CONCURRENT_USERS=2000 \
-        /scripts/booking_concurrent_test.js
+docker compose up -d --build
+docker compose logs -f
+docker compose down
 ```
 
-The test verifies that exactly `SEAT_LIMIT` bookings are confirmed and the rest are waitlisted, with zero errors.
+## Environment Variables
+
+### event-service
+
+- `SERVER_PORT` (default `8081`)
+- `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`
+- `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB`
+- `CACHE_TTL` (default `5m`)
+
+### booking-service
+
+- `SERVER_PORT` (default `8082`)
+- `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`
+- `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB`
+- `EVENT_SERVICE_URL` (default `http://localhost:8081`)
+- `BOOKING_LOCK_TTL` (default `1m`)
+- `REDIS_QUOTA_TTL` (default `24h`)
+
+## Load Test (k6)
+
+The repository includes `k6/concurrent_flow_test.js` for concurrent end-to-end flow testing.
+
+Run locally:
+
+```bash
+k6 run ./k6/concurrent_flow_test.js
+```
+
+Supported environment overrides:
+
+- `EVENT_BASE_URL` (default `http://localhost:8081`)
+- `BOOKING_BASE_URL` (default `http://localhost:8082`)
+- `EVENT_ID` (default `1`)
+- `QUOTA` (default `5000`)
+
+Example:
+
+```bash
+EVENT_BASE_URL=http://localhost:8081 \
+BOOKING_BASE_URL=http://localhost:8082 \
+EVENT_ID=1 \
+QUOTA=5000 \
+k6 run ./k6/concurrent_flow_test.js
+```
+
+## Notes
+
+- booking-service enforces duplicate protection using a unique `(event_id, uid)` index.
+- Stable `uid` is derived from user email (UUID SHA1) for deterministic identity.
+- event-service caches event read responses in Redis and invalidates cache on create/update/delete.
