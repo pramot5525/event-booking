@@ -1,48 +1,52 @@
 package database
 
 import (
+	"booking-service/config"
 	"context"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
-func NewPostgres(dsn string) (*gorm.DB, error) {
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+func NewPostgres(cfg *config.Config) (*gorm.DB, error) {
+	db, err := gorm.Open(postgres.Open(cfg.DB.DSN()), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open postgres: %w", err)
 	}
 
 	sqlDB, err := db.DB()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("postgres db handle: %w", err)
 	}
 
-	sqlDB.SetMaxIdleConns(25)
 	sqlDB.SetMaxOpenConns(300)
-	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
+	sqlDB.SetMaxIdleConns(80)
 	sqlDB.SetConnMaxLifetime(30 * time.Minute)
 
 	return db, nil
 }
 
-func NewRedis(host, port, user, password, db string) (*redis.Client, error) {
-	dbNum, err := strconv.Atoi(db)
-	if err != nil {
-		return nil, fmt.Errorf("invalid REDIS_DB value %q: %w", db, err)
-	}
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     fmt.Sprintf("%s:%s", host, port),
-		Username: user,
-		Password: password,
-		DB:       dbNum,
+func NewRedis(cfg *config.Config) (*redis.Client, error) {
+	client := redis.NewClient(&redis.Options{
+		Addr:         cfg.Redis.Addr(),
+		Password:     cfg.Redis.Password,
+		DB:           cfg.Redis.DB,
+		PoolSize:     300,
+		MinIdleConns: 20,
 	})
-	if err := rdb.Ping(context.Background()).Err(); err != nil {
-		return nil, err
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := client.Ping(ctx).Err(); err != nil {
+		return nil, fmt.Errorf("ping redis: %w", err)
 	}
-	return rdb, nil
+
+	return client, nil
 }

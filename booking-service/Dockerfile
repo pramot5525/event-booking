@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
@@ -16,6 +16,6 @@ WORKDIR /app
 COPY --from=builder /app/server .
 COPY --from=builder /app/docs ./docs
 
-EXPOSE 8082
+EXPOSE 8081
 
 CMD ["./server"]

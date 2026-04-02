@@ -16,10 +16,11 @@ func NewRouter(app *fiber.App, bookingService service.BookingService) {
 		URL: "/docs/openapi.yaml",
 	}))
 
-	bookingHandler := handler.NewBookingHandler(bookingService)
+	h := handler.NewBookingHandler(bookingService)
+
+	app.Get("/health", h.Health)
 
 	v1 := app.Group("/api/v1")
-	v1.Post("/bookings", bookingHandler.BookEvent)
-	v1.Get("/bookings/user/:uid", bookingHandler.GetUserBookings)
-	v1.Get("/bookings/event/:eventID", bookingHandler.GetEventBookings)
+	v1.Post("/bookings", h.BookSeat)
+	v1.Post("/bookings/quota/init", h.InitializeQuota)
 }

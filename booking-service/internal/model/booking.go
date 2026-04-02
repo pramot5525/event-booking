@@ -1,34 +1,15 @@
 package model
 
-import (
-	"time"
-
-	"github.com/google/uuid"
-)
-
-type BookingStatus string
-
-const (
-	BookingStatusConfirmed  BookingStatus = "confirmed"
-	BookingStatusWaitlisted BookingStatus = "waitlisted"
-	BookingStatusCancelled  BookingStatus = "cancelled"
-)
+import "time"
 
 type Booking struct {
-	ID         int64         `json:"id" gorm:"primaryKey;autoIncrement"`
-	EventID    int64         `json:"event_id" gorm:"uniqueIndex:idx_event_user"`
-	UID        uuid.UUID     `json:"uid"  gorm:"uniqueIndex:idx_event_user"`
-	UserName   string        `json:"user_name"`
-	UserEmail  string        `json:"user_email"`
-	UserPhone  string        `json:"user_phone"`
-	Status     BookingStatus `json:"status"`
-	SeatNumber *int32        `json:"seat_number,omitempty"`
-	CreatedAt  time.Time     `json:"created_at" gorm:"autoCreateTime"`
-}
-
-type CreateBookingRequest struct {
-	EventID   int64  `json:"event_id"`
-	UserName  string `json:"user_name"`
-	UserEmail string `json:"user_email"`
-	UserPhone string `json:"user_phone"`
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	EventID   uint      `json:"event_id" gorm:"not null;index:idx_event_user,unique;index:idx_event_status"`
+	UID       string    `json:"uid" gorm:"type:varchar(100);not null;index:idx_event_user,unique"`
+	UserName  string    `json:"user_name" gorm:"not null"`
+	UserEmail string    `json:"user_email" gorm:"not null"`
+	UserPhone string    `json:"user_phone" gorm:"not null"`
+	Status    string    `json:"status" gorm:"type:varchar(20);not null;default:confirmed;index:idx_event_status"`
+	Position  *int64    `json:"position,omitempty" gorm:"column:waitlist_position"`
+	CreatedAt time.Time `json:"created_at"`
 }

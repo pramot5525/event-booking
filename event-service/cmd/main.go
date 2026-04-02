@@ -31,12 +31,18 @@ func main() {
 	}
 	defer sqlDB.Close()
 
+	rdb, err := database.NewRedis(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rdb.Close()
+
 	if err := db.AutoMigrate(&model.Event{}); err != nil {
 		log.Fatal(err)
 	}
 
 	eventRepo := repository.NewEventRepository(db)
-	eventService := service.NewEventService(eventRepo)
+	eventService := service.NewEventService(eventRepo, rdb, cfg.CacheTTL)
 
 	app := fiber.New()
 	// Setup routes
