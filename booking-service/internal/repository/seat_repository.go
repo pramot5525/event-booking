@@ -31,6 +31,9 @@ type SeatRepository interface {
 	GetBooked(ctx context.Context, eventID int64) (int64, error)
 	SetBooked(ctx context.Context, eventID int64, booked int64) error
 	IncrementBooked(ctx context.Context, eventID int64) error
+	// TryAcquireInitLock attempts to acquire a short-lived distributed lock for
+	// seeding the seat counter. Returns true only for the one goroutine that wins.
+	TryAcquireInitLock(ctx context.Context, eventID int64) (bool, error)
 }
 
 func NewSeatRepository(rdb *redis.Client) SeatRepository {
@@ -117,4 +120,15 @@ func (r *seatRepository) SetBooked(ctx context.Context, eventID int64, booked in
 
 func (r *seatRepository) IncrementBooked(ctx context.Context, eventID int64) error {
 	return r.rdb.Incr(ctx, bookedKey(eventID)).Err()
+}
+
+func initLockKey(eventID int64) string {
+	return fmt.Sprintf("init_lock:%d", eventID)
+}
+
+// TryAcquireInitLock uses SETNX with a short TTL so only one goroutine among
+// many concurrent arrivals performs the expensive DB seed query.
+func (r *seatRepository) TryAcquireInitLock(ctx context.Context, eventID int64) (bool, error) {
+	ok, err := r.rdb.SetNX(ctx, initLockKey(eventID), 1, 10*time.Second).Result()
+	return ok, err
 }

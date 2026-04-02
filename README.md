@@ -75,15 +75,18 @@ Once running:
 
 ## Load Testing
 
-Concurrency tests use [k6](https://k6.io). With all services running:
+Concurrency tests use [k6](https://k6.io). With all services running, you can run k6 via Docker:
 
 ```bash
-k6 run \
-  -e EVENT_SERVICE_URL=http://localhost:8081 \
-  -e BOOKING_SERVICE_URL=http://localhost:8082 \
-  -e SEAT_LIMIT=100 \
-  -e CONCURRENT_USERS=2000 \
-  k6/booking_concurrent_test.js
+docker run --rm -i \
+        --add-host=host.docker.internal:host-gateway \
+        -v "${PWD}/k6:/scripts" \
+        grafana/k6 run \
+        -e EVENT_SERVICE_URL=http://host.docker.internal:8081 \
+        -e BOOKING_SERVICE_URL=http://host.docker.internal:8082 \
+        -e SEAT_LIMIT=100 \
+        -e CONCURRENT_USERS=2000 \
+        /scripts/booking_concurrent_test.js
 ```
 
 The test verifies that exactly `SEAT_LIMIT` bookings are confirmed and the rest are waitlisted, with zero errors.

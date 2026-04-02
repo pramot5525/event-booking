@@ -47,11 +47,22 @@ export function setup() {
     headers: { "Content-Type": "application/json" },
   });
 
-  check(res, { "event created": (r) => r.status === 200 });
+  const ok = check(res, { "event created": (r) => r.status === 200 });
+  if (!ok) {
+    throw new Error(
+      `Failed to create event (status=${res.status}) from ${EVENT_SERVICE_URL}. Body: ${res.body}`
+    );
+  }
 
-  const body = JSON.parse(res.body);
-  if (!body.id) {
-    throw new Error(`Failed to create event: ${res.body}`);
+  let body;
+  try {
+    body = JSON.parse(res.body || "{}");
+  } catch (err) {
+    throw new Error(`Invalid create event response JSON: ${res.body}`);
+  }
+
+  if (!body || !body.id) {
+    throw new Error(`Create event response missing id: ${res.body}`);
   }
 
   console.log(`Event created with id=${body.id}, seat_limit=${SEAT_LIMIT}`);

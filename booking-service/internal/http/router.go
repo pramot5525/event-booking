@@ -2,14 +2,13 @@ package http
 
 import (
 	"booking-service/internal/http/handler"
-	"booking-service/internal/http/middleware"
 	"booking-service/internal/service"
 
 	"github.com/gofiber/fiber/v2"
 	swagger "github.com/gofiber/swagger"
 )
 
-func NewRouter(app *fiber.App, bookingService service.BookingService, apiKey string) {
+func NewRouter(app *fiber.App, bookingService service.BookingService) {
 	app.Get("/docs/openapi.yaml", func(c *fiber.Ctx) error {
 		return c.SendFile("./docs/openapi.yaml")
 	})
@@ -19,7 +18,7 @@ func NewRouter(app *fiber.App, bookingService service.BookingService, apiKey str
 
 	bookingHandler := handler.NewBookingHandler(bookingService)
 
-	v1 := app.Group("/api/v1", middleware.APIKeyAuth(apiKey))
+	v1 := app.Group("/api/v1")
 	v1.Post("/bookings", bookingHandler.BookEvent)
 	v1.Get("/bookings/user/:uid", bookingHandler.GetUserBookings)
 	v1.Get("/bookings/event/:eventID", bookingHandler.GetEventBookings)

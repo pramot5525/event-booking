@@ -50,7 +50,7 @@ func main() {
 	app := fiber.New(fiber.Config{
 		BodyLimit: 4 * 1024, // 4 KB
 	})
-	bookinghttp.NewRouter(app, bookingSvc, cfg.APIKey)
+	bookinghttp.NewRouter(app, bookingSvc)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)

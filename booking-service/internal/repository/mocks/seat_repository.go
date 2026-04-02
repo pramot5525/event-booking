@@ -600,3 +600,66 @@ func (_c *SeatRepository_SetEventCache_Call) RunAndReturn(run func(ctx context.C
 	_c.Call.Return(run)
 	return _c
 }
+
+// TryAcquireInitLock provides a mock function for the type SeatRepository
+func (_mock *SeatRepository) TryAcquireInitLock(ctx context.Context, eventID int64) (bool, error) {
+	ret := _mock.Called(ctx, eventID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for TryAcquireInitLock")
+	}
+
+	var r0 bool
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, int64) (bool, error)); ok {
+		return returnFunc(ctx, eventID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, int64) bool); ok {
+		r0 = returnFunc(ctx, eventID)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, int64) error); ok {
+		r1 = returnFunc(ctx, eventID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// SeatRepository_TryAcquireInitLock_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'TryAcquireInitLock'
+type SeatRepository_TryAcquireInitLock_Call struct {
+	*mock.Call
+}
+
+// TryAcquireInitLock is a helper method to define mock.On call
+//   - ctx context.Context
+//   - eventID int64
+func (_e *SeatRepository_Expecter) TryAcquireInitLock(ctx interface{}, eventID interface{}) *SeatRepository_TryAcquireInitLock_Call {
+	return &SeatRepository_TryAcquireInitLock_Call{Call: _e.mock.On("TryAcquireInitLock", ctx, eventID)}
+}
+
+func (_c *SeatRepository_TryAcquireInitLock_Call) Run(run func(ctx context.Context, eventID int64)) *SeatRepository_TryAcquireInitLock_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 int64
+		if args[1] != nil {
+			arg1 = args[1].(int64)
+		}
+		run(arg0, arg1)
+	})
+	return _c
+}
+
+func (_c *SeatRepository_TryAcquireInitLock_Call) Return(acquired bool, err error) *SeatRepository_TryAcquireInitLock_Call {
+	_c.Call.Return(acquired, err)
+	return _c
+}
+
+func (_c *SeatRepository_TryAcquireInitLock_Call) RunAndReturn(run func(ctx context.Context, eventID int64) (bool, error)) *SeatRepository_TryAcquireInitLock_Call {
+	_c.Call.Return(run)
+	return _c
+}

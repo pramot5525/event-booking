@@ -101,10 +101,6 @@ func (s *bookingService) BookEvent(request *model.CreateBookingRequest) (*BookEv
 
 	uid := uuid.NewSHA1(bookingNamespace, []byte(request.UserEmail))
 
-	if err := s.checkDuplicates(request.EventID, uid); err != nil {
-		return nil, err
-	}
-
 	if err := s.initSeatCounter(ctx, request.EventID, event.SeatLimit); err != nil {
 		return nil, err
 	}
@@ -122,44 +118,39 @@ func (s *bookingService) BookEvent(request *model.CreateBookingRequest) (*BookEv
 	return s.persistConfirmedBooking(ctx, request, uid, event.SeatLimit, remaining)
 }
 
-// checkDuplicates returns ErrAlreadyBooked or ErrAlreadyWaitlisted if the user
-// already has a record for this event. The DB unique constraint is the
-// authoritative guard; this is a fast-path pre-check.
-func (s *bookingService) checkDuplicates(eventID int64, uid uuid.UUID) error {
-	exists, err := s.bookingRepo.ExistsByEventAndUID(eventID, uid)
-	if err != nil {
-		return fmt.Errorf("check duplicate booking: %w", err)
-	}
-	if exists {
-		return ErrAlreadyBooked
-	}
-
-	onWaitlist, err := s.waitlistRepo.ExistsByEventAndUser(eventID, uid)
-	if err != nil {
-		return fmt.Errorf("check duplicate waitlist: %w", err)
-	}
-	if onWaitlist {
-		return ErrAlreadyWaitlisted
-	}
-
-	return nil
-}
-
 // initSeatCounter ensures the Redis seat counter exists for the event.
-// On the very first request it seeds the counter from the confirmed booking
-// count in the DB; subsequent calls are no-ops (SETNX semantics in Init).
+//
+// Under high concurrency every goroutine races to initialise the counter at
+// start-up (cold cache). Without a guard all of them would hit the DB
+// simultaneously. A short-lived Redis lock (SETNX) ensures exactly one
+// goroutine performs the expensive DB count; the rest skip the DB query and
+// let Init's SETNX semantics make their call a no-op once the winner sets
+// the key.
 func (s *bookingService) initSeatCounter(ctx context.Context, eventID int64, seatLimit int32) error {
 	booked, err := s.seatRepo.GetBooked(ctx, eventID)
 	if err != nil && err != redis.Nil {
 		return fmt.Errorf("get booked count: %w", err)
 	}
+
 	if err == redis.Nil {
-		booked, err = s.bookingRepo.CountConfirmedByEventID(eventID)
-		if err != nil {
-			return fmt.Errorf("count confirmed bookings: %w", err)
+		// Only the goroutine that wins the lock queries the DB.
+		won, lockErr := s.seatRepo.TryAcquireInitLock(ctx, eventID)
+		if lockErr != nil {
+			return fmt.Errorf("acquire init lock: %w", lockErr)
 		}
-		if err := s.seatRepo.SetBooked(ctx, eventID, booked); err != nil {
-			return fmt.Errorf("set booked count: %w", err)
+		if won {
+			booked, err = s.bookingRepo.CountConfirmedByEventID(eventID)
+			if err != nil {
+				return fmt.Errorf("count confirmed bookings: %w", err)
+			}
+			if err := s.seatRepo.SetBooked(ctx, eventID, booked); err != nil {
+				return fmt.Errorf("set booked count: %w", err)
+			}
+		} else {
+			// Another goroutine is seeding; use 0 as a safe default.
+			// Init below uses SETNX so it becomes a no-op once the winner
+			// sets the key with the correct value.
+			booked = 0
 		}
 	}
 
@@ -173,6 +164,15 @@ func (s *bookingService) initSeatCounter(ctx context.Context, eventID int64, sea
 // persistConfirmedBooking saves the booking record and enqueues it for
 // downstream processing. On DB failure it rolls back the claimed seat slot.
 func (s *bookingService) persistConfirmedBooking(ctx context.Context, request *model.CreateBookingRequest, uid uuid.UUID, seatLimit int32, remaining int64) (*BookEventResult, error) {
+	onWaitlist, err := s.waitlistRepo.ExistsByEventAndUser(request.EventID, uid)
+	if err != nil {
+		return nil, fmt.Errorf("check duplicate waitlist: %w", err)
+	}
+	if onWaitlist {
+		_ = s.seatRepo.Increment(ctx, request.EventID)
+		return nil, ErrAlreadyWaitlisted
+	}
+
 	seatNum := int32(seatLimit) - int32(remaining)
 	booking := &model.Booking{
 		EventID:    request.EventID,
@@ -199,6 +199,14 @@ func (s *bookingService) persistConfirmedBooking(ctx context.Context, request *m
 }
 
 func (s *bookingService) addToWaitlist(request *model.CreateBookingRequest, uid uuid.UUID) (*BookEventResult, error) {
+	exists, err := s.bookingRepo.ExistsByEventAndUID(request.EventID, uid)
+	if err != nil {
+		return nil, fmt.Errorf("check duplicate booking: %w", err)
+	}
+	if exists {
+		return nil, ErrAlreadyBooked
+	}
+
 	position, err := s.waitlistRepo.CountWaiting(request.EventID)
 	if err != nil {
 		return nil, fmt.Errorf("count waitlist: %w", err)

@@ -62,10 +62,10 @@ func givenEventCached(m *testMocks, event *repository.CachedEvent) {
 	m.seatRepo.On("GetEventCache", mock.Anything, event.ID).Return(event, nil)
 }
 
-// givenNoDuplicates stubs both duplicate checks to return "not found".
+// givenNoDuplicates stubs duplicate checks as optional no-op defaults.
 func givenNoDuplicates(m *testMocks, eventID int64) {
-	m.bookingRepo.On("ExistsByEventAndUID", eventID, mock.Anything).Return(false, nil)
-	m.waitlistRepo.On("ExistsByEventAndUser", eventID, mock.Anything).Return(false, nil)
+	m.bookingRepo.On("ExistsByEventAndUID", eventID, mock.Anything).Return(false, nil).Maybe()
+	m.waitlistRepo.On("ExistsByEventAndUser", eventID, mock.Anything).Return(false, nil).Maybe()
 }
 
 // givenSeatCounterInRedis stubs the seat counter as already seeded in Redis.
@@ -78,9 +78,11 @@ func givenSeatCounterInRedis(m *testMocks, event *repository.CachedEvent, booked
 
 // givenSeatCounterFromDB stubs the cold-start path: GetBooked misses in Redis,
 // so the counter is seeded from the confirmed-booking count in the DB.
+// The goroutine wins the init lock (TryAcquireInitLock returns true).
 func givenSeatCounterFromDB(m *testMocks, event *repository.CachedEvent, confirmedCount int64) {
 	available := int32(event.SeatLimit) - int32(confirmedCount)
 	m.seatRepo.On("GetBooked", mock.Anything, event.ID).Return(int64(0), redis.Nil)
+	m.seatRepo.On("TryAcquireInitLock", mock.Anything, event.ID).Return(true, nil)
 	m.bookingRepo.On("CountConfirmedByEventID", event.ID).Return(confirmedCount, nil)
 	m.seatRepo.On("SetBooked", mock.Anything, event.ID, confirmedCount).Return(nil)
 	m.seatRepo.On("Init", mock.Anything, event.ID, available).Return(nil)
@@ -228,6 +230,8 @@ func (s *BookingServiceSuite) TestBookEvent() {
 			request: req(1, "alice@example.com"),
 			setup: func(m *testMocks) {
 				givenEventCached(m, cachedEvent)
+				givenSeatCounterInRedis(m, cachedEvent, 2)
+				givenSeatsFull(m, 1)
 				m.bookingRepo.On("ExistsByEventAndUID", int64(1), mock.Anything).Return(true, nil)
 			},
 			wantErr: service.ErrAlreadyBooked,
@@ -237,8 +241,11 @@ func (s *BookingServiceSuite) TestBookEvent() {
 			request: req(1, "alice@example.com"),
 			setup: func(m *testMocks) {
 				givenEventCached(m, cachedEvent)
+				givenSeatCounterInRedis(m, cachedEvent, 2)
+				givenSeatsFull(m, 1)
 				m.bookingRepo.On("ExistsByEventAndUID", int64(1), mock.Anything).Return(false, nil)
-				m.waitlistRepo.On("ExistsByEventAndUser", int64(1), mock.Anything).Return(true, nil)
+				m.waitlistRepo.On("CountWaiting", int64(1)).Return(int32(0), nil)
+				m.waitlistRepo.On("Add", mock.AnythingOfType("*model.WaitlistEntry")).Return(uniqueViolationErr())
 			},
 			wantErr: service.ErrAlreadyWaitlisted,
 		},
@@ -290,6 +297,8 @@ func (s *BookingServiceSuite) TestBookEvent() {
 			request: req(1, "alice@example.com"),
 			setup: func(m *testMocks) {
 				givenEventCached(m, cachedEvent)
+				givenSeatCounterInRedis(m, cachedEvent, 2)
+				givenSeatsFull(m, 1)
 				m.bookingRepo.On("ExistsByEventAndUID", int64(1), mock.Anything).Return(false, errors.New("db error"))
 			},
 		},
@@ -298,7 +307,8 @@ func (s *BookingServiceSuite) TestBookEvent() {
 			request: req(1, "alice@example.com"),
 			setup: func(m *testMocks) {
 				givenEventCached(m, cachedEvent)
-				m.bookingRepo.On("ExistsByEventAndUID", int64(1), mock.Anything).Return(false, nil)
+				givenSeatCounterInRedis(m, cachedEvent, 0)
+				m.seatRepo.On("Decrement", mock.Anything, int64(1)).Return(int64(1), nil)
 				m.waitlistRepo.On("ExistsByEventAndUser", int64(1), mock.Anything).Return(false, errors.New("db error"))
 			},
 		},
@@ -318,6 +328,7 @@ func (s *BookingServiceSuite) TestBookEvent() {
 				givenEventCached(m, cachedEvent)
 				givenNoDuplicates(m, 1)
 				m.seatRepo.On("GetBooked", mock.Anything, int64(1)).Return(int64(0), redis.Nil)
+				m.seatRepo.On("TryAcquireInitLock", mock.Anything, int64(1)).Return(true, nil)
 				m.bookingRepo.On("CountConfirmedByEventID", int64(1)).Return(int64(0), errors.New("db error"))
 			},
 		},
@@ -328,6 +339,7 @@ func (s *BookingServiceSuite) TestBookEvent() {
 				givenEventCached(m, cachedEvent)
 				givenNoDuplicates(m, 1)
 				m.seatRepo.On("GetBooked", mock.Anything, int64(1)).Return(int64(0), redis.Nil)
+				m.seatRepo.On("TryAcquireInitLock", mock.Anything, int64(1)).Return(true, nil)
 				m.bookingRepo.On("CountConfirmedByEventID", int64(1)).Return(int64(0), nil)
 				m.seatRepo.On("SetBooked", mock.Anything, int64(1), int64(0)).Return(errors.New("redis error"))
 			},
