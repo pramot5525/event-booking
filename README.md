@@ -41,9 +41,7 @@ The stack runs with Docker Compose:
 
 ### booking-service (http://localhost:8082)
 
-- `GET /health`
 - `POST /api/v1/bookings`
-- `POST /api/v1/bookings/quota/init`
 - `GET /swagger/`
 - `GET /docs/openapi.yaml`
 

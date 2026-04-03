@@ -113,18 +113,6 @@ export function setup() {
       console.log("[setup] event created");
     }
   }
-
-  const quotaRes = http.post(
-    `${BOOKING_BASE_URL}/api/v1/bookings/quota/init`,
-    JSON.stringify({ event_id: EVENT_ID, quota: QUOTA }),
-    { headers: { "Content-Type": "application/json" } }
-  );
-
-  if (quotaRes.status !== 200) {
-    console.error(`[setup] quota init failed status=${quotaRes.status} body=${quotaRes.body}`);
-  } else {
-    console.log(`[setup] quota initialized event_id=${EVENT_ID} quota=${QUOTA}`);
-  }
 }
 
 export function bookingFlow() {

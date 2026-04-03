@@ -33,19 +33,13 @@ func main() {
 	}
 	defer sqlDB.Close()
 
-	rdb, err := database.NewRedis(cfg)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer rdb.Close()
-
-	if err := db.AutoMigrate(&model.Booking{}); err != nil {
+	if err := db.AutoMigrate(&model.Booking{}, &model.EventQuota{}); err != nil {
 		log.Fatal(err)
 	}
 
 	bookingRepo := repository.NewBookingRepository(db)
 	eventClient := service.NewEventClient(cfg.EventServiceURL)
-	bookingService := service.NewBookingService(bookingRepo, rdb, eventClient, cfg)
+	bookingService := service.NewBookingService(bookingRepo, db, eventClient)
 
 	app := fiber.New()
 	httpAdapter.NewRouter(app, bookingService)

@@ -7,14 +7,18 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var ErrDuplicateBooking = errors.New("duplicate booking")
 
 type BookingRepository interface {
 	CreateBooking(ctx context.Context, booking *model.Booking) error
-	CountBookingsByEvent(ctx context.Context, eventID uint) (int64, error)
 	GetMaxWaitlistPosition(ctx context.Context, eventID uint) (int64, error)
+	CountBookingsByEvent(ctx context.Context, eventID uint) (int64, error)
+	UpsertQuota(ctx context.Context, tx *gorm.DB, eventID uint, seatsTotal int64) error
+	LockQuota(ctx context.Context, tx *gorm.DB, eventID uint) (*model.EventQuota, error)
+	IncrementSeatsBooked(ctx context.Context, tx *gorm.DB, eventID uint) error
 }
 
 type bookingRepository struct {
@@ -56,4 +60,26 @@ func (r *bookingRepository) GetMaxWaitlistPosition(ctx context.Context, eventID 
 		return 0, err
 	}
 	return maxPos, nil
+}
+
+func (r *bookingRepository) UpsertQuota(ctx context.Context, tx *gorm.DB, eventID uint, seatsTotal int64) error {
+	quota := model.EventQuota{EventID: eventID, SeatsTotal: seatsTotal, SeatsBooked: 0}
+	return tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&quota).Error
+}
+
+func (r *bookingRepository) LockQuota(ctx context.Context, tx *gorm.DB, eventID uint) (*model.EventQuota, error) {
+	var quota model.EventQuota
+	err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("event_id = ?", eventID).
+		First(&quota).Error
+	if err != nil {
+		return nil, err
+	}
+	return &quota, nil
+}
+
+func (r *bookingRepository) IncrementSeatsBooked(ctx context.Context, tx *gorm.DB, eventID uint) error {
+	return tx.WithContext(ctx).Model(&model.EventQuota{}).
+		Where("event_id = ?", eventID).
+		UpdateColumn("seats_booked", gorm.Expr("seats_booked + 1")).Error
 }

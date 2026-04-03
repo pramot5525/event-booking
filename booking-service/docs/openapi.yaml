@@ -10,18 +10,6 @@ servers:
   - url: http://localhost:8082
 
 paths:
-  /health:
-    get:
-      summary: Health check
-      operationId: getHealth
-      responses:
-        "200":
-          description: Service is healthy
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/HealthResponse"
-
   /api/v1/bookings:
     post:
       summary: Book a seat
@@ -59,9 +47,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
-                quotaNotInitialized:
-                  value:
-                    error: quota is not initialized for this event
                 inProgress:
                   value:
                     error: booking is already in progress for this user
@@ -75,45 +60,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /api/v1/bookings/quota/init:
-    post:
-      summary: Initialize or reset event quota in Redis
-      operationId: initializeQuota
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/InitializeQuotaRequest"
-      responses:
-        "200":
-          description: Quota initialized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/InitializeQuotaResponse"
-        "400":
-          description: Invalid event_id or quota
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "500":
-          description: Failed to initialize quota
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-
 components:
   schemas:
-    HealthResponse:
-      type: object
-      properties:
-        status:
-          type: string
-          example: ok
-
     CreateBookingRequest:
       type: object
       required:
@@ -190,38 +138,6 @@ components:
           $ref: "#/components/schemas/Booking"
         waitlist_entry:
           $ref: "#/components/schemas/Booking"
-
-    InitializeQuotaRequest:
-      type: object
-      required:
-        - event_id
-        - quota
-      properties:
-        event_id:
-          type: integer
-          format: int64
-          minimum: 1
-          example: 1
-        quota:
-          type: integer
-          format: int64
-          minimum: 0
-          example: 100
-
-    InitializeQuotaResponse:
-      type: object
-      properties:
-        message:
-          type: string
-          example: quota initialized
-        event_id:
-          type: integer
-          format: int64
-          example: 1
-        quota:
-          type: integer
-          format: int64
-          example: 100
 
     ErrorResponse:
       type: object
