@@ -18,6 +18,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
+
 func main() {
 	_ = godotenv.Load()
 	cfg := config.Load()
@@ -33,19 +34,19 @@ func main() {
 	}
 	defer sqlDB.Close()
 
+	if err := db.AutoMigrate(&model.Booking{}, &model.EventQuota{}); err != nil {
+		log.Fatal(err)
+	}
+
 	rdb, err := database.NewRedis(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer rdb.Close()
 
-	if err := db.AutoMigrate(&model.Booking{}); err != nil {
-		log.Fatal(err)
-	}
-
-	bookingRepo := repository.NewBookingRepository(db)
+	bookingRepo := repository.NewBookingRepository(db, rdb)
 	eventClient := service.NewEventClient(cfg.EventServiceURL)
-	bookingService := service.NewBookingService(bookingRepo, rdb, eventClient, cfg)
+	bookingService := service.NewBookingService(bookingRepo, db, eventClient)
 
 	app := fiber.New()
 	httpAdapter.NewRouter(app, bookingService)

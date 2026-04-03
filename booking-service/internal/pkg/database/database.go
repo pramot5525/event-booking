@@ -25,8 +25,9 @@ func NewPostgres(cfg *config.Config) (*gorm.DB, error) {
 		return nil, fmt.Errorf("postgres db handle: %w", err)
 	}
 
-	sqlDB.SetMaxOpenConns(300)
-	sqlDB.SetMaxIdleConns(80)
+	// Keep app-level pool moderate and let PgBouncer multiplex connections.
+	sqlDB.SetMaxOpenConns(80)
+	sqlDB.SetMaxIdleConns(20)
 	sqlDB.SetConnMaxLifetime(30 * time.Minute)
 
 	return db, nil
@@ -36,9 +37,8 @@ func NewRedis(cfg *config.Config) (*redis.Client, error) {
 	client := redis.NewClient(&redis.Options{
 		Addr:         cfg.Redis.Addr(),
 		Password:     cfg.Redis.Password,
-		DB:           cfg.Redis.DB,
-		PoolSize:     300,
-		MinIdleConns: 20,
+		PoolSize:     50,
+		MinIdleConns: 5,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

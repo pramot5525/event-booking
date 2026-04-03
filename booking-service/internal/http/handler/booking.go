@@ -3,6 +3,7 @@ package handler
 import (
 	"booking-service/internal/service"
 	"errors"
+	"log"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -22,11 +23,6 @@ type createBookingRequest struct {
 	UserPhone string `json:"user_phone"`
 }
 
-type initQuotaRequest struct {
-	EventID uint  `json:"event_id"`
-	Quota   int64 `json:"quota"`
-}
-
 func (h *BookingHandler) BookSeat(c *fiber.Ctx) error {
 	var req createBookingRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -43,38 +39,13 @@ func (h *BookingHandler) BookSeat(c *fiber.Ctx) error {
 		switch {
 		case errors.Is(err, service.ErrInvalidRequest):
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
-		case errors.Is(err, service.ErrBookingInProgress):
-			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "booking is already in progress for this user"})
 		case errors.Is(err, service.ErrAlreadyBooked):
 			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "user already booked this event"})
 		default:
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "booking failed"})
+			log.Printf("booking error: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "booking failed, please try again"})
 		}
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(result)
-}
-
-func (h *BookingHandler) InitializeQuota(c *fiber.Ctx) error {
-	var req initQuotaRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid payload"})
-	}
-
-	if err := h.bookingService.InitializeQuota(c.UserContext(), req.EventID, req.Quota); err != nil {
-		if errors.Is(err, service.ErrInvalidRequest) {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
-		}
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to initialize quota"})
-	}
-
-	return c.JSON(fiber.Map{
-		"message":  "quota initialized",
-		"event_id": req.EventID,
-		"quota":    req.Quota,
-	})
-}
-
-func (h *BookingHandler) Health(c *fiber.Ctx) error {
-	return c.JSON(fiber.Map{"status": "ok"})
 }

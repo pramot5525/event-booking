@@ -13,3 +13,9 @@ type Booking struct {
 	Position  *int64    `json:"position,omitempty" gorm:"column:waitlist_position"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+type EventQuota struct {
+	EventID     uint  `gorm:"primaryKey"`
+	SeatsTotal  int64 `gorm:"not null"`
+	SeatsBooked int64 `gorm:"not null;default:0"`
+}
