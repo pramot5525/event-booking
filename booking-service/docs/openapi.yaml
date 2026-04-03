@@ -13,13 +13,6 @@ paths:
   /api/v1/bookings:
     post:
       summary: Book a seat
-      description: |
-        Booking flow:
-        1) Validate request and derive stable user ID from email (SHA1 UUID)
-        2) Fetch seat limit from event service; upsert quota row in Postgres (idempotent)
-        3) Atomically reserve a seat in Redis via Lua script (SET NX seed + DECR)
-        4) If seat reserved → persist confirmed booking in Postgres; on DB failure rollback Redis with INCR
-        5) If no seats remain → persist waitlist entry in Postgres
       operationId: createBooking
       requestBody:
         required: true

@@ -32,7 +32,7 @@ func (r RedisConfig) Addr() string {
 
 func (d DBConfig) DSN() string {
 	return fmt.Sprintf(
-		"host=%s user=%s password=%s dbname=%s port=%s sslmode=disable search_path=public",
+		"host=%s user=%s password=%s dbname=%s port=%s sslmode=disable",
 		d.Host,
 		d.User,
 		d.Password,
@@ -67,4 +67,3 @@ func getEnv(key, fallback string) string {
 	}
 	return v
 }
-

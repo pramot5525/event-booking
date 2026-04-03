@@ -30,7 +30,7 @@ type RedisConfig struct {
 }
 
 func (d DBConfig) DSN() string {
-	return fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable search_path=public",
+	return fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable",
 		d.Host, d.User, d.Password, d.Name, d.Port)
 }
 

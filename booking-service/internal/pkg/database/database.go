@@ -25,8 +25,9 @@ func NewPostgres(cfg *config.Config) (*gorm.DB, error) {
 		return nil, fmt.Errorf("postgres db handle: %w", err)
 	}
 
-	sqlDB.SetMaxOpenConns(300)
-	sqlDB.SetMaxIdleConns(80)
+	// Keep app-level pool moderate and let PgBouncer multiplex connections.
+	sqlDB.SetMaxOpenConns(80)
+	sqlDB.SetMaxIdleConns(20)
 	sqlDB.SetConnMaxLifetime(30 * time.Minute)
 
 	return db, nil

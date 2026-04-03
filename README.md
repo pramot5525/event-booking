@@ -1,6 +1,6 @@
 # Event Booking System
 
-Go microservices for event management and high-concurrency seat booking with PostgreSQL-backed transactions and Redis quota control.
+Go microservices for event management and high-concurrency seat booking with PgBouncer + PostgreSQL transactions and Redis quota control.
 
 ---
 
@@ -8,10 +8,10 @@ Go microservices for event management and high-concurrency seat booking with Pos
 
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│   Client    │────▶│  event-service   │────▶│   PostgreSQL     │
-│             │     │  :8081           │     │   (events DB)    │
-│             │     │  Fiber + GORM    │◀───▶│                  │
-│             │     └──────────────────┘     └──────────────────┘
+│   Client    │────▶│  event-service   │────▶│    PgBouncer     │
+│             │     │  :8081           │     │     :6432        │
+│             │     │  Fiber + GORM    │◀───▶│ transaction pool │
+│             │     └──────────────────┘     └────────┬─────────┘
 │             │              │ cache
 │             │              ▼
 │             │     ┌──────────────────┐
@@ -20,11 +20,17 @@ Go microservices for event management and high-concurrency seat booking with Pos
 │             │     │  cache / locks   │
 │             │     └──────────────────┘
 │             │              ▲ quota
-│             │     ┌──────────────────┐     ┌──────────────────┐
-│             │────▶│ booking-service  │────▶│   PostgreSQL     │
-│             │     │  :8082           │     │   (bookings DB)  │
-│             │     │  Fiber + GORM    │◀───▶│                  │
-└─────────────┘     └──────────────────┘     └──────────────────┘
+│             │     ┌──────────────────┐              │
+│             │────▶│ booking-service  │──────────────┘
+│             │     │  :8082           │
+│             │     │  Fiber + GORM    │
+└─────────────┘     └──────────────────┘
+                                         │
+                                         ▼
+                                  ┌──────────────────┐
+                                  │   PostgreSQL     │
+                                  │      :5432       │
+                                  └──────────────────┘
                              │ HTTP
                              ▼
                     event-service :8081
@@ -35,6 +41,7 @@ Go microservices for event management and high-concurrency seat booking with Pos
 |-----------------|-----:|---------------------------------------------------|
 | event-service   | 8081 | Event CRUD + Redis read cache                     |
 | booking-service | 8082 | Seat booking, waitlist, duplicate protection      |
+| pgbouncer       | 6432 | PostgreSQL connection pool (transaction mode)     |
 | postgres        | 5432 | Persistent storage for both services              |
 | redis           | 6379 | Event cache, idempotency locks, quota counters    |
 
@@ -180,7 +187,11 @@ docker compose down
 | Variable           | Default  |
 |--------------------|----------|
 | SERVER_PORT        | 8081     |
-| POSTGRES_HOST/PORT/USER/PASSWORD/DB | — |
+| POSTGRES_HOST      | pgbouncer |
+| POSTGRES_PORT      | 6432     |
+| POSTGRES_USER      | eventbooking |
+| POSTGRES_PASSWORD  | eventbooking |
+| POSTGRES_DB        | eventdb  |
 | REDIS_HOST/PORT/PASSWORD/DB | — |
 | CACHE_TTL          | 5m       |
 
@@ -189,11 +200,32 @@ docker compose down
 | Variable           | Default                  |
 |--------------------|--------------------------|
 | SERVER_PORT        | 8082                     |
-| POSTGRES_HOST/PORT/USER/PASSWORD/DB | — |
-| REDIS_HOST/PORT/PASSWORD/DB | — |
+| POSTGRES_HOST      | pgbouncer                |
+| POSTGRES_PORT      | 6432                     |
+| POSTGRES_USER      | eventbooking             |
+| POSTGRES_PASSWORD  | eventbooking             |
+| POSTGRES_DB        | eventdb                  |
+| REDIS_HOST/PORT/PASSWORD/DB | —             |
 | EVENT_SERVICE_URL  | http://localhost:8081    |
 | BOOKING_LOCK_TTL   | 1m                       |
 | REDIS_QUOTA_TTL    | 24h                      |
+
+### pgbouncer
+
+| Variable                   | Value in compose |
+|----------------------------|------------------|
+| DB_HOST/DB_PORT            | postgres / 5432  |
+| DB_USER/DB_PASSWORD/DB_NAME| eventbooking / eventbooking / eventdb |
+| AUTH_TYPE                  | scram-sha-256    |
+| LISTEN_PORT                | 6432             |
+| POOL_MODE                  | transaction      |
+| MAX_CLIENT_CONN            | 1000             |
+| DEFAULT_POOL_SIZE          | 50               |
+| RESERVE_POOL_SIZE          | 10               |
+| IGNORE_STARTUP_PARAMETERS  | extra_float_digits,search_path |
+| SERVER_RESET_QUERY         | DISCARD ALL      |
+
+PgBouncer is the only endpoint apps should use for PostgreSQL in Compose.
 
 ---
 
