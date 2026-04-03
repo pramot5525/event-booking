@@ -7,34 +7,33 @@ Go microservices for event management and high-concurrency seat booking with PgB
 ## System Architecture
 
 ```
-┌─────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│   Client    │────▶│  event-service   │────▶│    PgBouncer     │
-│             │     │  :8081           │     │     :6432        │
-│             │     │  Fiber + GORM    │◀───▶│ transaction pool │
-│             │     └──────────────────┘     └────────┬─────────┘
-│             │              │ cache
-│             │              ▼
-│             │     ┌──────────────────┐
-│             │     │     Redis        │
-│             │     │  :6379           │
-│             │     │  cache / locks   │
-│             │     └──────────────────┘
-│             │              ▲ quota
-│             │     ┌──────────────────┐              │
-│             │────▶│ booking-service  │──────────────┘
-│             │     │  :8082           │
-│             │     │  Fiber + GORM    │
-└─────────────┘     └──────────────────┘
-                                         │
-                                         ▼
-                                  ┌──────────────────┐
-                                  │   PostgreSQL     │
-                                  │      :5432       │
-                                  └──────────────────┘
-                             │ HTTP
-                             ▼
-                    event-service :8081
-                    (fetch seat limit)
+graph TD
+    subgraph Clients
+        C[Client App / Web]
+    end
+
+    subgraph Service Layer
+        ES["<b>Event Service</b><br/>:8081 (Fiber + GORM)"]
+        BS["<b>Booking Service</b><br/>:8082 (Fiber + GORM)"]
+    end
+
+    subgraph Infrastructure
+        PB["<b>PgBouncer</b><br/>:6432 (Transaction Pool)"]
+        RD[("<b>Redis</b><br/>:6379 (Cache/Locks)")]
+        DB[("<b>PostgreSQL</b><br/>:5432")]
+    end
+
+    %% Flows
+    C -->|REST| ES
+    C -->|REST| BS
+    
+    BS -->|HTTP: Fetch Seat Limit| ES
+    
+    ES <-->|Query| PB
+    BS -->|Set Quota/Lock| RD
+    ES -->|Cache Data| RD
+    
+    PB --> DB
 ```
 
 | Service         | Port | Role                                              |
