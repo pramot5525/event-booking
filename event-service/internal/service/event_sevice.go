@@ -43,7 +43,6 @@ func (s *eventService) GetEvent(id int64) (*model.Event, error) {
 
 	if s.rdb != nil {
 		if cached, err := s.rdb.Get(context.Background(), key).Bytes(); err == nil {
-			log.Printf("cache hit key=%s", key)
 			var event model.Event
 			if err := json.Unmarshal(cached, &event); err == nil {
 				return &event, nil
@@ -81,7 +80,6 @@ func (s *eventService) GetEvent(id int64) (*model.Event, error) {
 func (s *eventService) GetEvents() ([]*model.Event, error) {
 	if s.rdb != nil {
 		if cached, err := s.rdb.Get(context.Background(), keyAllEvents).Bytes(); err == nil {
-			log.Printf("cache hit key=%s", keyAllEvents)
 			var events []*model.Event
 			if err := json.Unmarshal(cached, &events); err == nil {
 				return events, nil
