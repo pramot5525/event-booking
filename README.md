@@ -6,7 +6,7 @@ Go microservices for event management and high-concurrency seat booking with PgB
 
 ## System Architecture
 
-```
+```mermaid
 graph TD
     subgraph Clients
         C[Client App / Web]
