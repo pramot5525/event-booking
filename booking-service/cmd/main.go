@@ -18,6 +18,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
+
 func main() {
 	_ = godotenv.Load()
 	cfg := config.Load()
@@ -37,7 +38,13 @@ func main() {
 		log.Fatal(err)
 	}
 
-	bookingRepo := repository.NewBookingRepository(db)
+	rdb, err := database.NewRedis(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rdb.Close()
+
+	bookingRepo := repository.NewBookingRepository(db, rdb)
 	eventClient := service.NewEventClient(cfg.EventServiceURL)
 	bookingService := service.NewBookingService(bookingRepo, db, eventClient)
 

@@ -9,6 +9,7 @@ type Config struct {
 	AppPort         string
 	EventServiceURL string
 	DB              DBConfig
+	Redis           RedisConfig
 }
 
 type DBConfig struct {
@@ -17,6 +18,16 @@ type DBConfig struct {
 	User     string
 	Password string
 	Name     string
+}
+
+type RedisConfig struct {
+	Host     string
+	Port     string
+	Password string
+}
+
+func (r RedisConfig) Addr() string {
+	return fmt.Sprintf("%s:%s", r.Host, r.Port)
 }
 
 func (d DBConfig) DSN() string {
@@ -40,6 +51,11 @@ func Load() *Config {
 			User:     getEnv("POSTGRES_USER", "eventbooking"),
 			Password: getEnv("POSTGRES_PASSWORD", "eventbooking"),
 			Name:     getEnv("POSTGRES_DB", "eventdb"),
+		},
+		Redis: RedisConfig{
+			Host:     getEnv("REDIS_HOST", "localhost"),
+			Port:     getEnv("REDIS_PORT", "6379"),
+			Password: getEnv("REDIS_PASSWORD", ""),
 		},
 	}
 }

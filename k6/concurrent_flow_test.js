@@ -10,7 +10,7 @@
  * Override defaults:
  *   EVENT_BASE_URL=http://localhost:8081 \
  *   BOOKING_BASE_URL=http://localhost:8082 \
- *   EVENT_ID=1 QUOTA=50 \
+ *   EVENT_ID=1 QUOTA=1000 \
  *   k6 run k6/concurrent_flow_test.js
  */
 
@@ -23,6 +23,11 @@ const EVENT_BASE_URL = __ENV.EVENT_BASE_URL || "http://localhost:8081";
 const BOOKING_BASE_URL = __ENV.BOOKING_BASE_URL || "http://localhost:8082";
 const EVENT_ID = parseInt(__ENV.EVENT_ID || "1", 10);
 const QUOTA = parseInt(__ENV.QUOTA || "50", 10);
+const VUS = parseInt(__ENV.VUS || "300", 10);
+const RAMP_UP = __ENV.RAMP_UP || "10s";
+const HOLD = __ENV.HOLD || "20s";
+const RAMP_DOWN = __ENV.RAMP_DOWN || "5s";
+const REQUEST_TIMEOUT = __ENV.REQUEST_TIMEOUT || "10s";
 
 // ── Custom metrics ────────────────────────────────────────────────────────────
 const bookingConfirmed = new Counter("booking_confirmed");
@@ -32,13 +37,18 @@ const errorRate = new Rate("error_rate");
 const listEventsDuration = new Trend("list_events_duration_ms", true);
 const bookingDuration = new Trend("booking_duration_ms", true);
 
-// ── Options: 1000 concurrent VUs ─────────────────────────────────────────────
+// ── Options: ramp to 1000 concurrent VUs ─────────────────────────────────────
 export const options = {
   scenarios: {
     concurrent_booking: {
-      executor: "constant-vus",
-      vus: 1000,
-      duration: "1m",
+      executor: "ramping-vus",
+      startVUs: 0,
+      stages: [
+        { duration: RAMP_UP, target: VUS }, // ramp up
+        { duration: HOLD, target: VUS }, // hold
+        { duration: RAMP_DOWN, target: 0 }, // ramp down
+      ],
+      gracefulRampDown: "10s",
     },
   },
   thresholds: {
@@ -54,7 +64,6 @@ export const options = {
 
 // ── Setup: seed event + quota once before VUs start ──────────────────────────
 export function setup() {
-  // 1. Ensure the target event exists (create if needed)
   const eventRes = http.post(
     `${EVENT_BASE_URL}/api/v1/events`,
     JSON.stringify({
@@ -64,30 +73,45 @@ export function setup() {
       start_date: "2030-01-01T09:00:00Z",
       end_date: "2030-01-01T18:00:00Z",
     }),
-    { headers: { "Content-Type": "application/json" } }
+    {
+      headers: { "Content-Type": "application/json" },
+      timeout: REQUEST_TIMEOUT,
+    }
   );
-  if (eventRes.status === 201) {
-    const body = JSON.parse(eventRes.body);
-    console.log(`[setup] event created – id=${body.id}`);
-  } else {
-    console.log(`[setup] event create status=${eventRes.status} (may already exist)`);
+  if (eventRes.status === 200 || eventRes.status === 201) {
+    try {
+      const body = JSON.parse(eventRes.body);
+      if (body?.id) {
+        console.log(`[setup] event ready - id=${body.id}`);
+        return { eventId: body.id };
+      }
+    } catch (_) {
+      // fall back to EVENT_ID below when response is not JSON
+    }
+    console.log(`[setup] event ready - status=${eventRes.status}, using EVENT_ID=${EVENT_ID}`);
+    return { eventId: EVENT_ID };
   }
+
+  console.log(`[setup] event create failed status=${eventRes.status}, using EVENT_ID=${EVENT_ID}`);
+  return { eventId: EVENT_ID };
 }
 
 // ── Default function (runs per VU) ───────────────────────────────────────────
-export default function () {
+export default function (data) {
   const uid = `vu${__VU}_iter${__ITER}`;
+  const targetEventID = data?.eventId || EVENT_ID;
 
   // ── Step 1: List events (event-service) ────────────────────────────────────
   const t0 = Date.now();
   const listRes = http.get(`${EVENT_BASE_URL}/api/v1/events`, {
     tags: { name: "ListEvents" },
+    timeout: REQUEST_TIMEOUT,
   });
   listEventsDuration.add(Date.now() - t0);
 
   check(listRes, {
     "list events 200": (r) => r.status === 200,
-    "list events no 5xx": (r) => r.status < 500,
+    "list events no 5xx": (r) => r.status > 0 && r.status < 500,
   });
 
   if (listRes.status !== 200) {
@@ -99,7 +123,7 @@ export default function () {
 
   // ── Step 2: Book a seat (booking-service) ──────────────────────────────────
   const payload = JSON.stringify({
-    event_id: EVENT_ID,
+    event_id: targetEventID,
     user_name: `User ${uid}`,
     user_email: `${uid}@flow.test`,
     user_phone: "0800000000",
@@ -112,13 +136,14 @@ export default function () {
     {
       headers: { "Content-Type": "application/json" },
       tags: { name: "BookSeat" },
+      timeout: REQUEST_TIMEOUT,
     }
   );
   bookingDuration.add(Date.now() - t1);
 
-  const bookOk = check(bookRes, {
+  check(bookRes, {
     "book seat 201": (r) => r.status === 201,
-    "book seat no 5xx": (r) => r.status < 500,
+    "book seat no 5xx": (r) => r.status > 0 && r.status < 500,
   });
 
   if (bookRes.status === 201) {

@@ -15,11 +15,11 @@ paths:
       summary: Book a seat
       description: |
         Booking flow:
-        1) Acquire idempotency lock with Redis SET NX
-        2) Atomically decrement quota with Redis DECR
-        3) Persist booking in Postgres
-        4) If quota is full, rollback with Redis INCR and persist waitlist entry
-        5) Rollback quota with Redis INCR if DB write fails
+        1) Validate request and derive stable user ID from email (SHA1 UUID)
+        2) Fetch seat limit from event service; upsert quota row in Postgres (idempotent)
+        3) Atomically reserve a seat in Redis via Lua script (SET NX seed + DECR)
+        4) If seat reserved → persist confirmed booking in Postgres; on DB failure rollback Redis with INCR
+        5) If no seats remain → persist waitlist entry in Postgres
       operationId: createBooking
       requestBody:
         required: true
@@ -41,15 +41,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
-          description: Booking conflict (in progress or already booked)
+          description: User already has a booking (confirmed or waitlisted) for this event
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
-                inProgress:
-                  value:
-                    error: booking is already in progress for this user
                 alreadyBooked:
                   value:
                     error: user already booked this event
@@ -112,7 +109,15 @@ components:
           example: "0812345678"
         status:
           type: string
+          enum:
+            - confirmed
+            - waitlisted
           example: confirmed
+        position:
+          type: integer
+          format: int64
+          description: Waitlist position; present only when status is "waitlisted"
+          example: 3
         created_at:
           type: string
           format: date-time
